@@ -1,7 +1,7 @@
 --!strict
 -- 상점 창: 아침·밤 창의 "상점"(LocalPlayer 속성 ShopOpen = true)으로 연다.
--- 위에는 빚(남은 빚, 밤마다 붙는 이자, 갚을 금액을 −/+로 골라 갚기), 아래에는 스킬·기구 카드(그림·단계·설명·값).
--- 사고 갚는 것은 서버(Days.buy, Days.payDebt)가 판정하고, 코인은 모두가 같이 쓴다.
+-- 위에는 빚(남은 빚, 밤마다 붙는 이자·상환금·연체, 더 갚을 금액을 −/+로 골라 갚기), 아래에는 스킬·기구 카드(그림·단계·설명·값).
+-- 사고 갚는 것은 서버(Days.buy, Days.payDebt)가 판정한다. 내 지갑에서만 돈이 나가고, 산 스킬·기구는 모두에게 적용된다.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -29,12 +29,14 @@ local GOLD = Color3.fromRGB(196, 140, 48)
 local GRAY = Color3.fromRGB(214, 204, 210)
 local WHITE = Color3.new(1, 1, 1)
 
-local WIDTH, HEIGHT = 720, 600
+local WIDTH, HEIGHT = 780, 700 -- 플레이 테스트: 글씨가 작아 보기 힘들어서 창과 글씨를 키웠다
 
 local player = Players.LocalPlayer
 local shop: { ShopView } = {}
-local wallet = 0
+local wallet = 0 -- 내 지갑
 local debt = 0
+local due = 0 -- 오늘 밤 상환금
+local strikes, maxStrikes = 0, 3
 local payAmount = 50 -- 갚을 금액(−/+ 10씩)
 local PAY_STEP = 10
 local phase = "morning"
@@ -109,36 +111,36 @@ UiDeco.header(window, 44, 22)
 local scale = Instance.new("UIScale")
 scale.Parent = window
 
-local title = text(window, "상점", 26, CORAL, ROUND)
-title.Position = UDim2.fromOffset(24, 14)
-title.Size = UDim2.fromOffset(200, 34)
-local coinLabel = text(window, "", 18, GOLD, ROUND)
+local title = text(window, "상점", 30, CORAL, ROUND)
+title.Position = UDim2.fromOffset(24, 12)
+title.Size = UDim2.fromOffset(200, 38)
+local coinLabel = text(window, "", 22, GOLD, ROUND)
 coinLabel.AnchorPoint = Vector2.new(1, 0)
-coinLabel.Position = UDim2.new(1, -24, 0, 16)
-coinLabel.Size = UDim2.fromOffset(240, 30)
+coinLabel.Position = UDim2.new(1, -24, 0, 14)
+coinLabel.Size = UDim2.fromOffset(280, 34)
 coinLabel.TextXAlignment = Enum.TextXAlignment.Right
 
 -- 빚
 local debtCard = Instance.new("Frame")
 debtCard.Position = UDim2.fromOffset(24, 56)
-debtCard.Size = UDim2.new(1, -48, 0, 78)
+debtCard.Size = UDim2.new(1, -48, 0, 92)
 debtCard.BackgroundColor3 = Color3.fromRGB(255, 244, 228)
 debtCard.BorderSizePixel = 0
 corner(debtCard, 16)
 debtCard.Parent = window
-local debtTitle = text(debtCard, "", 20, INK, ROUND)
+local debtTitle = text(debtCard, "", 24, INK, ROUND)
 debtTitle.Position = UDim2.fromOffset(16, 10)
-debtTitle.Size = UDim2.fromOffset(320, 28)
-local debtNote = text(debtCard, "", 12, MUTED)
-debtNote.Position = UDim2.fromOffset(16, 40)
-debtNote.Size = UDim2.fromOffset(300, 30)
+debtTitle.Size = UDim2.fromOffset(340, 30)
+local debtNote = text(debtCard, "", 15, MUTED)
+debtNote.Position = UDim2.fromOffset(16, 44)
+debtNote.Size = UDim2.fromOffset(350, 42)
 debtNote.TextWrapped = true
 debtNote.TextYAlignment = Enum.TextYAlignment.Top
 local payRow = Instance.new("Frame")
 payRow.BackgroundTransparency = 1
 payRow.AnchorPoint = Vector2.new(1, 0.5)
 payRow.Position = UDim2.new(1, -14, 0.5, 0)
-payRow.Size = UDim2.fromOffset(330, 36)
+payRow.Size = UDim2.fromOffset(350, 40)
 payRow.Parent = debtCard
 local payLayout = Instance.new("UIListLayout")
 payLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -147,47 +149,49 @@ payLayout.Padding = UDim.new(0, 8)
 payLayout.SortOrder = Enum.SortOrder.LayoutOrder
 payLayout.Parent = payRow
 -- [−] 금액 [+] [갚기] [전부 갚기]
-local minus = button(payRow, "−", UDim2.fromOffset(36, 36), WHITE, INK)
+local minus = button(payRow, "−", UDim2.fromOffset(40, 40), WHITE, INK)
 minus.LayoutOrder = 1
-minus.TextSize = 20
+minus.TextSize = 22
 stroke(minus, PINK, 2)
-local amountLabel = text(payRow, "", 18, INK, ROUND)
+local amountLabel = text(payRow, "", 21, INK, ROUND)
 amountLabel.LayoutOrder = 2
-amountLabel.Size = UDim2.fromOffset(64, 36)
+amountLabel.Size = UDim2.fromOffset(64, 40)
 amountLabel.TextXAlignment = Enum.TextXAlignment.Center
-local plus = button(payRow, "+", UDim2.fromOffset(36, 36), WHITE, INK)
+local plus = button(payRow, "+", UDim2.fromOffset(40, 40), WHITE, INK)
 plus.LayoutOrder = 3
-plus.TextSize = 20
+plus.TextSize = 22
 stroke(plus, PINK, 2)
-local payButton = button(payRow, "갚기", UDim2.fromOffset(70, 36), CORAL, WHITE)
+local payButton = button(payRow, "갚기", UDim2.fromOffset(72, 40), CORAL, WHITE)
 payButton.LayoutOrder = 4
-local payAll = button(payRow, "전부 갚기", UDim2.fromOffset(88, 36), CORAL, WHITE)
+payButton.TextSize = 17
+local payAll = button(payRow, "전부 갚기", UDim2.fromOffset(96, 40), CORAL, WHITE)
 payAll.LayoutOrder = 5
+payAll.TextSize = 17
 local payButtons: { TextButton } = { payButton, payAll }
 
 -- 스킬·기구 카드
 local grid = Instance.new("Frame")
 grid.BackgroundTransparency = 1
-grid.Position = UDim2.fromOffset(24, 148)
-grid.Size = UDim2.new(1, -48, 1, -210)
+grid.Position = UDim2.fromOffset(24, 162)
+grid.Size = UDim2.new(1, -48, 1, -232)
 grid.Parent = window
 local layout = Instance.new("UIGridLayout")
-layout.CellSize = UDim2.fromOffset(216, 118)
+layout.CellSize = UDim2.fromOffset(236, 146)
 layout.CellPadding = UDim2.fromOffset(10, 10)
 layout.FillDirectionMaxCells = 3
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 layout.Parent = grid
 
-local close = button(window, "닫기", UDim2.fromOffset(120, 42), WHITE, INK)
+local close = button(window, "닫기", UDim2.fromOffset(130, 46), WHITE, INK)
 close.AnchorPoint = Vector2.new(1, 1)
 close.Position = UDim2.new(1, -24, 1, -14)
-close.TextSize = 16
+close.TextSize = 19
 stroke(close, PINK, 2)
-local hint = text(window, "스킬과 기구는 모두에게 적용되고, 코인은 모두가 같이 써요.", 12, MUTED)
+local hint = text(window, "내 지갑에서만 돈이 나가고, 산 스킬과 기구는 모두에게 적용돼요.", 15, MUTED)
 hint.AnchorPoint = Vector2.new(0, 1)
-hint.Position = UDim2.new(0, 24, 1, -24)
-hint.Size = UDim2.fromOffset(420, 20)
+hint.Position = UDim2.new(0, 24, 1, -26)
+hint.Size = UDim2.fromOffset(560, 22)
 
 local cards: { [string]: Card } = {}
 
@@ -202,27 +206,29 @@ for i, upgrade in Config.Upgrades do
 	local icon = Instance.new("TextLabel")
 	icon.BackgroundColor3 = WHITE
 	icon.Position = UDim2.fromOffset(10, 10)
-	icon.Size = UDim2.fromOffset(46, 46)
+	icon.Size = UDim2.fromOffset(50, 50)
 	icon.Font = BODY
-	icon.TextSize = 28
+	icon.TextSize = 30
 	icon.Text = upgrade.icon
-	corner(icon, 23)
+	corner(icon, 25)
 	icon.Parent = card
 
-	local name = text(card, upgrade.name, 14, INK)
-	name.Position = UDim2.fromOffset(64, 10)
-	name.Size = UDim2.new(1, -72, 0, 20)
+	local name = text(card, upgrade.name, 17, INK)
+	name.Position = UDim2.fromOffset(70, 10)
+	name.Size = UDim2.new(1, -78, 0, 24)
 	name.TextTruncate = Enum.TextTruncate.AtEnd
-	local level = text(card, "", 13, GOLD)
-	level.Position = UDim2.fromOffset(64, 32)
-	level.Size = UDim2.new(1, -72, 0, 18)
-	local desc = text(card, upgrade.desc, 12, MUTED)
-	desc.Position = UDim2.fromOffset(10, 62)
-	desc.Size = UDim2.new(1, -120, 0, 44)
+	local level = text(card, "", 15, GOLD)
+	level.Position = UDim2.fromOffset(70, 36)
+	level.Size = UDim2.new(1, -78, 0, 20)
+	-- 설명은 카드 너비를 다 써서 두 줄까지(살 버튼은 그 아래 오른쪽)
+	local desc = text(card, upgrade.desc, 15, MUTED)
+	desc.Position = UDim2.fromOffset(10, 66)
+	desc.Size = UDim2.new(1, -20, 0, 34)
 	desc.TextWrapped = true
 	desc.TextYAlignment = Enum.TextYAlignment.Top
 
-	local buy = button(card, "", UDim2.fromOffset(92, 34), SAGE, WHITE)
+	local buy = button(card, "", UDim2.fromOffset(104, 36), SAGE, WHITE)
+	buy.TextSize = 16
 	buy.AnchorPoint = Vector2.new(1, 1)
 	buy.Position = UDim2.new(1, -10, 1, -10)
 	buy.Activated:Connect(function()
@@ -242,12 +248,12 @@ local function clampPay()
 end
 
 local function render()
-	coinLabel.Text = `코인 {wallet}`
+	coinLabel.Text = `내 지갑 {wallet}`
 	clampPay()
 	amountLabel.Text = tostring(payAmount)
 	if debt > 0 then
 		debtTitle.Text = `남은 빚 {debt}`
-		debtNote.Text = `밤마다 남은 빚의 {math.floor(Config.Debt.interest * 100 + 0.5)}% 이자가 붙어요. 얼마나 갚을지 골라요(일찍 갚을수록 이자가 줄어요).`
+		debtNote.Text = `밤마다 이자 {math.floor(Config.Debt.interest * 100 + 0.5)}% · 상환금 {due} 자동 출금\n연체 {strikes}/{maxStrikes} · 더 갚으면 이자가 줄어요`
 	else
 		debtTitle.Text = "빚을 다 갚았어요!"
 		debtNote.Text = "이제 번 코인은 모두 가게를 키우는 데 써요."
@@ -274,7 +280,7 @@ local function applyScale()
 	local camera = workspace.CurrentCamera
 	if camera then
 		local size = camera.ViewportSize
-		scale.Scale = math.clamp(math.min((size.X - 24) / WIDTH, (size.Y - 40) / HEIGHT), 0.4, 1)
+		scale.Scale = math.clamp(math.min((size.X - 24) / WIDTH, (size.Y - 40) / HEIGHT), 0.4, 1.3)
 	end
 end
 
@@ -312,11 +318,31 @@ payAll.Activated:Connect(function()
 	payEvent:FireServer("all")
 end)
 
-stateEvent.OnClientEvent:Connect(function(incoming: { phase: string, wallet: number, shop: { ShopView }?, debt: number? })
+type Incoming = {
+	phase: string,
+	people: { { userId: number, wallet: number } }?,
+	shop: { ShopView }?,
+	debt: number?,
+	money: { due: number, strikes: number, maxStrikes: number }?,
+}
+
+stateEvent.OnClientEvent:Connect(function(incoming: Incoming)
 	phase = incoming.phase
-	wallet = incoming.wallet
+	wallet = 0
+	local people = incoming.people
+	if people then
+		for _, person in people do
+			if person.userId == player.UserId then
+				wallet = person.wallet
+			end
+		end
+	end
 	shop = incoming.shop or {}
 	debt = incoming.debt or 0
+	local money = incoming.money
+	if money then
+		due, strikes, maxStrikes = money.due, money.strikes, money.maxStrikes
+	end
 	-- 영업이 시작되면 창을 닫는다
 	if phase ~= "morning" and phase ~= "night" and gui.Enabled then
 		setOpen(false)

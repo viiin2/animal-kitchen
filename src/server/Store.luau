@@ -7,6 +7,8 @@
 -- 기구 사이에 캐릭터가 반쯤 들어가 끼는 틈이 없게 벽 쪽 줄은 빈틈없이 붙이고, 뒷줄 뒤쪽은 투명 벽으로 채운다.
 -- 카운터 양 끝은 홀로 나가는 통로다(홀 테이블 치우기, Config.DineIn).
 -- 색은 연분홍·연하늘 파스텔. 분홍·흰 체크 바닥, 줄무늬 벽, 풍선·가랜드·큰 아이스크림 장식.
+-- 가게는 도시 한가운데 블록에 있다(City). 가게 안 조명은 늘 켜 두고, 전체 조명(Lighting)은 하루 내내 바꾸지 않는다.
+-- 바깥의 시간 흐름(아침 → 노을 → 밤)은 Outdoor.client가 도시 파트 색으로만 보여 준다(지붕이 없어 해·하늘빛을 바꾸면 가게 안도 바뀐다).
 local Lighting = game:GetService("Lighting")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,6 +16,7 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local Build = require(ReplicatedStorage.Shared.Build)
 local FoodModels = require(ReplicatedStorage.Shared.FoodModels)
 local Props = require(script.Parent.Props)
+local City = require(script.Parent.City)
 
 export type StationSpec = {
 	kind: string, -- icemachine | crate | board | grill | pot | oven | sauce | counter | plates | trash | extinguisher | seat
@@ -42,7 +45,6 @@ export type Layout = {
 	doors: { Door },
 	lane: { entry: Vector3, exit: Vector3, z: number }, -- 손님이 들어와 걷는 길
 	spawn: CFrame, -- 플레이어 캐릭터가 서는 곳(HumanoidRootPart 기준)
-	lamps: { PointLight }, -- 밤에만 켜는 불(영업 중에 켜면 흰 벽·바닥이 하얗게 날아간다)
 }
 
 local BLOCK = Enum.PartType.Block
@@ -60,7 +62,7 @@ local WEST = CFrame.Angles(0, math.rad(90), 0) -- 앞이 -X
 local SEAT_X = { -11, -5.5, 0, 5.5, 11 }
 local DAY_CLOCK = 13.5 -- 해가 높이 떠서 그림자가 짧은 오후
 local COUNTER_Z = -7
-local BACK_Z = 15.5 -- 뒷줄(아이스크림 기계·재료 상자·쟁반) 가운데. 섬(z 7.5까지)과의 통로가 6칸
+local BACK_Z = 15.5 -- 뒷줄(아이스크림 기계 둘·재료 상자·쟁반) 가운데. 섬(z 7.5까지)과의 통로가 6칸
 local STAND_Z = -10.3
 
 local Store = {}
@@ -78,8 +80,7 @@ local function barrier(parent: Instance, size: Vector3, position: Vector3)
 	part.Transparency = 1
 end
 
--- 아래는 연하늘, 위는 흰 줄무늬가 있는 연분홍 벽
--- 아래는 연하늘, 위는 아기 분홍(하얀 땡땡이는 decorate가 안쪽 면에 찍는다)
+-- 아래는 연하늘, 위는 아기 분홍(하얀 땡땡이는 decorate가 안쪽 면에 찍는다. 땡땡이는 벽에만)
 local function wall(parent: Instance, size: Vector3, center: Vector3)
 	local low = 3
 	block(parent, "WallLow", Vector3.new(size.X, low, size.Z), CFrame.new(center.X, low / 2, center.Z), SKY, Enum.Material.Plaster)
@@ -87,15 +88,58 @@ local function wall(parent: Instance, size: Vector3, center: Vector3)
 	block(parent, "WallTrim", Vector3.new(size.X + 0.1, 0.3, size.Z + 0.1), CFrame.new(center.X, low, center.Z), WHITE)
 end
 
-local function lamp(parent: Instance, position: Vector3, color: Color3, lamps: { PointLight })
+-- 가게 안 조명 세기. 너무 밝으면 흰 벽·바닥이 하얗게 날아가서(플레이 테스트) 아주 은은하게 둔다.
+-- 켜진 느낌은 벽 위 조명 띠와 벽등 전구(네온)가 낸다.
+-- 플레이 테스트: 벽등 0.35·채움 0.3에 밝은 주변광·대기 안개를 더했더니 화면이 하얗게 날아가 하나도 안 보였다.
+local INDOOR_LIGHT = Color3.fromRGB(255, 250, 244) -- 아주 살짝 따뜻한 흰 빛
+local WALL_LAMP_BRIGHTNESS = 0.2
+local FILL_BRIGHTNESS = 0.1
+
+-- 벽등(늘 켜 둔다)
+local function lamp(parent: Instance, position: Vector3, color: Color3)
 	local bulb = Build.ball(parent, 0.9, CFrame.new(position), color, Enum.Material.Neon)
 	local light = Instance.new("PointLight")
-	light.Color = Color3.fromRGB(255, 220, 200)
+	light.Color = INDOOR_LIGHT
 	light.Range = 14
-	light.Brightness = 0.6
-	light.Enabled = false
+	light.Brightness = WALL_LAMP_BRIGHTNESS
+	light.Shadows = false
 	light.Parent = bulb
-	table.insert(lamps, light)
+end
+
+-- 가게 안 조명: 벽 위쪽에 두른 흰 조명 띠(켜진 게 보이게)와, 천장 높이의 보이지 않는 채움 조명.
+-- 천장은 없다(카메라가 위에서 본다).
+local function indoorLights(parent: Instance)
+	local function strip(size: Vector3, position: Vector3)
+		local glow = Build.part(parent, BLOCK, size, CFrame.new(position), WHITE, Enum.Material.Neon)
+		glow.CastShadow = false
+	end
+	for _, side in { -1, 1 } do
+		strip(Vector3.new(0.12, 0.18, 23.5), Vector3.new(side * 19.44, 7.82, 6)) -- 주방 옆벽(높이 8)
+	end
+	strip(Vector3.new(56, 0.18, 0.12), Vector3.new(0, 8.82, -27.94)) -- 홀 앞벽(높이 9)
+	local spots = {}
+	for _, x in { -12, 0, 12 } do
+		for _, z in { 3, 12 } do
+			table.insert(spots, Vector3.new(x, 11, z)) -- 주방
+		end
+	end
+	for _, x in { -18, -6, 6, 18 } do
+		for _, z in { -12, -22 } do
+			table.insert(spots, Vector3.new(x, 11, z)) -- 홀
+		end
+	end
+	for _, spot in spots do
+		local holder = Build.part(parent, BLOCK, Vector3.new(0.2, 0.2, 0.2), CFrame.new(spot), WHITE)
+		holder.Name = "CeilingLight"
+		holder.Transparency = 1
+		holder.CastShadow = false
+		local light = Instance.new("PointLight")
+		light.Color = INDOOR_LIGHT
+		light.Range = 18
+		light.Brightness = FILL_BRIGHTNESS
+		light.Shadows = false
+		light.Parent = holder
+	end
 end
 
 -- 출입문 한 짝: hinge에서 dir(+1이면 +Z, -1이면 -Z) 쪽으로 뻗고, outward(-1 왼쪽 벽, +1 오른쪽 벽) 바깥으로 열린다.
@@ -328,19 +372,10 @@ local function decorate(deco: Instance, tables: { TableSpec })
 		Build.disc(deco, 0.16, 0.4, CFrame.new(base + Vector3.new(0, 2.7, 0)), Color3.fromRGB(110, 170, 96))
 	end
 
-	-- 홀 테이블: 밑에 둥근 러그, 아기 분홍 땡땡이 식탁보, 위에 작은 꽃병
+	-- 홀 테이블: 밑에 둥근 러그, 아기 분홍 식탁보, 위에 작은 꽃병. 땡땡이는 벽에만 둔다.
 	for i, spec in tables do
 		local p = spec.center
 		spec.top.Color = BABY
-		for d = 1, 14 do
-			local angle = d * 2.4
-			local radius = 0.45 + (d % 3) * 0.5
-			local dot = Vector3.new(p.X + math.cos(angle) * radius, 2.815, p.Z + math.sin(angle) * radius)
-			local nearFood = math.abs(math.abs(dot.X - p.X) - 0.99) < 0.7 and math.abs(dot.Z - p.Z) < 0.7
-			if not nearFood then
-				Build.disc(deco, 0.32, 0.03, CFrame.new(dot), WHITE)
-			end
-		end
 		local tint = if i % 2 == 0 then SKY else PINK
 		-- 겹친 원판 윗면이 0.03 이상 떨어져야 깜빡이지 않는다
 		Build.disc(deco, 8, 0.04, CFrame.new(p.X, 0.02, p.Z), tint:Lerp(WHITE, 0.25))
@@ -410,22 +445,26 @@ local function decorate(deco: Instance, tables: { TableSpec })
 	Build.part(deco, BLOCK, Vector3.new(0.3, 0.8, 0.8), CFrame.new(19.4, 6.45, 2) * CFrame.Angles(math.rad(45), 0, 0), PINK_DEEP)
 end
 
--- 달콤하고 밝은 조명: 살짝 분홍빛, 은은한 번짐
+-- 깨끗한 조명: 아주 살짝 따뜻한 중립 흰빛, 은은한 번짐.
+-- 플레이 테스트: 분홍 주변광·노을빛 보정은 누렇다고 했고, 그걸 빼고 푸른 쪽으로 맞췄더니 차갑다고 했다. 그 사이에 둔다.
+-- 밝기는 처음(잘 보이던) 값에 맞추고 색만 중립으로 바꿨다. 대기(Atmosphere) 안개는 넣지 않는다: 카메라와 가게 사이에 껴서 화면이 뿌옇게 날아갔다.
+local DAY_AMBIENT = Color3.fromRGB(126, 122, 120)
+local DAY_TINT = Color3.fromRGB(255, 252, 248)
 local function mood()
 	-- 해 위치를 하루 내내 고정한다. 해가 움직이면 흰 바닥·벽에 햇빛이 정면으로 비칠 때 화면이 하얗게 날아갔다.
-	Lighting.Ambient = Color3.fromRGB(128, 116, 122)
-	Lighting.OutdoorAmbient = Color3.fromRGB(150, 140, 148)
-	Lighting.Brightness = 1.6
+	Lighting.Ambient = DAY_AMBIENT
+	Lighting.OutdoorAmbient = Color3.fromRGB(146, 142, 140)
+	Lighting.Brightness = 1.5
 	Lighting.ClockTime = DAY_CLOCK
 	Lighting.GeographicLatitude = 30
-	Lighting.ExposureCompensation = -0.15
+	Lighting.ExposureCompensation = -0.25
 	Lighting.EnvironmentSpecularScale = 0.2
-	Lighting.EnvironmentDiffuseScale = 0.5
+	Lighting.EnvironmentDiffuseScale = 0.25 -- 하늘에서 오는 푸른 반사광을 줄인다
 	local tint = Instance.new("ColorCorrectionEffect")
 	tint.Name = "Tint"
-	tint.TintColor = Color3.fromRGB(255, 246, 250)
-	tint.Saturation = 0.06
-	tint.Contrast = 0.02
+	tint.TintColor = DAY_TINT
+	tint.Saturation = 0.14
+	tint.Contrast = 0.1
 	tint.Parent = Lighting
 	local bloom = Instance.new("BloomEffect")
 	bloom.Intensity = 0.12
@@ -440,13 +479,12 @@ function Store.build(): Layout
 	local deco = Instance.new("Folder")
 	deco.Name = "Decor"
 	deco.Parent = root
-	local lamps: { PointLight } = {}
 
 	-- 바닥: 주방은 분홍·흰 체크, 홀은 연하늘 마루
 	checker(deco, Vector3.new(0, 0, 6), Vector2.new(39.5, 23.5), 4, Color3.fromRGB(252, 214, 226), WHITE)
 	-- 홀 마루는 주방 바닥(z -5.75까지)과 겹치지 않게 그 앞에서 끝낸다(겹치면 경계가 깜빡인다)
 	block(deco, "HallFloor", Vector3.new(57, 1, 22.75), CFrame.new(0, -0.5, -17.125), Color3.fromRGB(252, 236, 240), Enum.Material.WoodPlanks)
-	block(deco, "Street", Vector3.new(120, 1, 120), CFrame.new(0, -1.1, 0), Color3.fromRGB(226, 236, 230), Enum.Material.Grass)
+	City.build(root)
 
 	-- 주방 벽: 뒷벽은 카메라 쪽이라 낮은 하늘색 벽만 둔다
 	block(deco, "BackWall", Vector3.new(40, 2.2, 0.5), CFrame.new(0, 1.1, 17.75), SKY, Enum.Material.Plaster)
@@ -455,9 +493,10 @@ function Store.build(): Layout
 	wall(deco, Vector3.new(0.5, 8, 23.5), Vector3.new(19.75, 0, 6))
 	for i, z in { 13, 4 } do
 		for _, side in { -1, 1 } do
-			lamp(deco, Vector3.new(side * 19.3, 7.2, z), if (i + side) % 2 == 0 then SKY else PINK, lamps)
+			lamp(deco, Vector3.new(side * 19.3, 7.2, z), if (i + side) % 2 == 0 then SKY else PINK)
 		end
 	end
+	indoorLights(deco)
 
 	-- 홀 벽(양옆에 문, 앞벽에 창문)과 장식
 	wall(deco, Vector3.new(57, 9, 0.5), Vector3.new(0, 0, -28.25))
@@ -513,7 +552,7 @@ function Store.build(): Layout
 	title.Parent = gui
 	gui.Parent = sign
 	for i, x in { -20, -8, 8, 20 } do
-		lamp(deco, Vector3.new(x, 8.5, -27.6), if i % 2 == 0 then SKY else PINK, lamps)
+		lamp(deco, Vector3.new(x, 8.5, -27.6), if i % 2 == 0 then SKY else PINK)
 	end
 
 	-- 플레이어가 가게 밖으로 나가지 못하게 하는 투명 울타리(카운터 위 포함). 홀은 카운터 양 끝 통로로 드나든다.
@@ -554,17 +593,20 @@ function Store.build(): Layout
 		})
 	end
 
-	-- 뒷줄: 아이스크림 기계(x -15~-9), 재료 상자 다섯(-9~11), 쟁반 더미(11~15).
-	-- 양옆 기구 줄(x ±15 바깥) 사이에 딱 맞춰서 뒷줄 기구 앞이 모두 비어 있게 한다(기구 앞을 막으면 프롬프트가 옆 기구로 잡힌다).
-	add("icemachine", "아이스크림 기계", Props.iceMachine(CFrame.new(-12, 0, BACK_Z) * SOUTH))
+	-- 뒷줄: 아이스크림 기계(x -18~-12), 재료 상자 다섯(-12~8), 쟁반 더미(8~12), 아이스크림 기계(12~18).
+	-- 아이스크림 기계는 양쪽 구석(양옆 기구 줄 뒤)으로 3칸씩 밀어 넣어 두 대를 둔다(손님이 몰릴 때 줄 서지 않게).
+	-- 기계 앞 절반(x ±12~15)만 통로에 닿아서 프롬프트를 그쪽으로 옮긴다(기구 앞을 막으면 프롬프트가 옆 기구로 잡힌다).
+	for _, side in { -1, 1 } do
+		add("icemachine", "아이스크림 기계", Props.iceMachine(CFrame.new(side * 15, 0, BACK_Z) * SOUTH, -side * 1.5))
+	end
 	-- 이름표 방향: 첫 상자(찻잎)에서 카메라를 보는 방향으로 모두 맞춘다
-	local tagFacing = (Config.Camera.position - Vector3.new(-7, TOP + 0.4, BACK_Z + 1.45)).Unit
+	local tagFacing = (Config.Camera.position - Vector3.new(-10, TOP + 0.4, BACK_Z + 1.45)).Unit
 	for i, ingredient in Config.CrateOrder do
-		local x = -7 + (i - 1) * 4
+		local x = -10 + (i - 1) * 4
 		local tint = if i % 2 == 0 then PINK else SKY
 		add("crate", Config.Ingredients[ingredient].name, Props.crate(CFrame.new(x, 0, BACK_Z) * SOUTH, ingredient, tint, tagFacing), { ingredient = ingredient, lockId = "ing:" .. ingredient })
 	end
-	add("plates", "쟁반", Props.plates(CFrame.new(13, 0, BACK_Z) * SOUTH))
+	add("plates", "쟁반", Props.plates(CFrame.new(10, 0, BACK_Z) * SOUTH))
 	-- 쓰레기통은 가운데 섬 왼쪽, 소화기는 오른쪽(오븐 옆)에 붙인다
 	add("trash", "쓰레기통", Props.trash(CFrame.new(-9.25, 0, 1.5) * WEST))
 	-- 홀 쓰레기통: 카운터 양 끝 통로로 나오자마자 버리게 통로 바로 옆에 하나씩(가운데에 두면 홀이 답답했다)
@@ -593,9 +635,6 @@ function Store.build(): Layout
 	counter.Name = "OrderCounter"
 	counter.Parent = stationFolder
 	block(counter, "CounterBody", Vector3.new(28, TOP - 0.3, 3), CFrame.new(0, (TOP - 0.3) / 2, COUNTER_Z), BABY)
-	-- 주방 쪽 앞면(카메라에 보이는 쪽)에 하얀 땡땡이
-	local counterFace = Vector3.new(0, (TOP - 0.3) / 2, COUNTER_Z + 1.5)
-	Build.polka(counter, CFrame.lookAt(counterFace, counterFace + Vector3.new(0, 0, 1)), 27.5, TOP - 0.6, 1.5, 0.5, WHITE)
 	for i = 0, 13 do
 		Build.part(counter, BLOCK, Vector3.new(0.9, TOP - 0.6, 0.08), CFrame.new(-13 + i * 2, (TOP - 0.3) / 2, COUNTER_Z - 1.53), WHITE)
 	end
@@ -642,7 +681,6 @@ function Store.build(): Layout
 		doors = doors,
 		lane = { entry = Vector3.new(-31, 0, -14), exit = Vector3.new(31, 0, -14), z = -14 },
 		spawn = CFrame.lookAt(Vector3.new(0, 2.2, 10.5), Vector3.new(0, 2.2, 0)),
-		lamps = lamps,
 	}
 end
 
@@ -650,21 +688,6 @@ end
 function Store.setDoors(layout: Layout, open: boolean)
 	for _, door in layout.doors do
 		TweenService:Create(door.panel, TweenInfo.new(0.9, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { CFrame = if open then door.open else door.closed }):Play()
-	end
-end
-
--- 하루의 시간: progress 0(아침) → 1(저녁). 해는 움직이지 않고, 저녁이 가까울수록 살짝 노을빛이 된다.
--- 불은 밤(정산 화면)에만 켠다. 영업 끝 무렵에 켜던 때는 흰 벽·바닥에 빛이 몰려 화면이 하얗게 날아갔다.
-function Store.setTime(layout: Layout, progress: number, night: boolean)
-	local t = math.clamp(progress, 0, 1)
-	Lighting.ClockTime = if night then 20.5 else DAY_CLOCK
-	Lighting.Ambient = if night then Color3.fromRGB(110, 98, 124) else Color3.fromRGB(128, 116, 122)
-	local tint = Lighting:FindFirstChild("Tint")
-	if tint and tint:IsA("ColorCorrectionEffect") then
-		tint.TintColor = if night then Color3.fromRGB(236, 232, 255) else Color3.fromRGB(255, 246, 250):Lerp(Color3.fromRGB(255, 226, 214), t)
-	end
-	for _, light in layout.lamps do
-		light.Enabled = night
 	end
 end
 

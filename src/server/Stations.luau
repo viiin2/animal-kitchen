@@ -5,7 +5,7 @@
 --   F(길게): 조합대 조합, 토핑 올리기, 소화기로 불 끄기, 개수대 설거지
 -- 홀 테이블에서 치운 빈 그릇(dishes)은 쓰레기통에 버리고, 설거지 날(Config.Wash.day)부터는 개수대에서 씻어야 한다.
 -- 조합대에는 재료를 세 개까지 올리고, 올린 재료 조합이 디저트(Config.Dishes)와 맞으면 조합된다.
--- 아이스크림 기계는 한 번에 한 명만 쓴다: 창(IceCream.client)에서 고른 그릇·맛·토핑을 서버가 검사해 손에 쥐여 준다.
+-- 아이스크림 기계(뒷줄 양쪽에 하나씩)는 한 대에 한 명만 쓴다: 창(IceCream.client)에서 고른 그릇·맛·토핑을 서버가 검사해 손에 쥐여 준다.
 -- 프롬프트를 켜고 끄는 것은 클라이언트(Prompts)가 한다: 서버는 쓸 수 있는지(속성 On)와 기본 길게 누르는 시간(속성 Hold)만 알려 주고,
 -- 클라이언트가 캐릭터가 바라보는 쪽의 가장 가까운 기구 하나만 켠다. 판정은 그대로 서버가 한다.
 local HttpService = game:GetService("HttpService")
@@ -61,6 +61,10 @@ local Stations = {}
 -- 손님 자리에 쟁반을 내면 부른다. (성공했는지, 알림 문장). Main이 Customers와 Days를 잇는다.
 -- 개인 기록(MVP 카드): 아이스크림 만들기·치우기·불 끄기. Main이 Days.stat을 넣는다.
 Stations.onStat = function(_player: Player, _key: string, _amount: number) end
+
+-- 돈이 드는 일을 할 때마다 부른다(밤 정산 장부). 키: ing:재료, ice:base·layer·topping, power:기구, extinguisher, wash, trash.
+-- 값은 Config.Costs에 있고, Main이 Days.spend를 넣는다.
+Stations.onSpend = function(_key: string, _count: number) end
 
 Stations.onServe = function(_player: Player, _seat: number, _dish: Item): (boolean, string)
 	return false, "영업 준비 중이에요"
@@ -151,6 +155,43 @@ local function matchDish(kinds: { string }): string?
 	return nil
 end
 
+-- 조합대 F 글: 지금 누르면 무엇이 만들어지는지. 모자라면 무엇을 더 올리면 되는지(가장 적게 모자란 디저트).
+local function boardAction(items: { Item }): string
+	local kinds = kindsOf(items)
+	local dish = matchDish(kinds)
+	if dish then
+		return `{Config.Dishes[dish].name} 만들기`
+	end
+	local best: string? = nil
+	local bestMissing: { string } = {}
+	for key, def in Config.Dishes do
+		if def.machine then
+			continue
+		end
+		local missing = table.clone(def.ingredients)
+		local fits = true
+		for _, kind in kinds do
+			local index = table.find(missing, kind)
+			if not index then
+				fits = false
+				break
+			end
+			table.remove(missing, index)
+		end
+		if fits and (not best or #missing < #bestMissing or (#missing == #bestMissing and key < best)) then
+			best, bestMissing = key, missing
+		end
+	end
+	if not best then
+		return "이 재료로는 못 만들어요"
+	end
+	local names = {}
+	for _, kind in bestMissing do
+		table.insert(names, Config.Ingredients[kind].name)
+	end
+	return `{table.concat(names, "·")} 더 올리면 {Config.Dishes[best].name}`
+end
+
 local function cookingItem(station: Station): Item?
 	local item = station.items[1]
 	if #station.items == 1 and item and Items.isDish(item) then
@@ -165,7 +206,8 @@ local function refreshPrompts(station: Station)
 	local kind = station.kind
 	local action: string
 	if kind == "crate" then
-		action = "꺼내기"
+		local cost = station.ingredient and Config.Costs.ingredients[station.ingredient]
+		action = if cost then `꺼내기 · {cost}코인` else "꺼내기"
 	elseif kind == "plates" then
 		action = "쟁반 들기"
 	elseif kind == "icemachine" then
@@ -199,6 +241,9 @@ local function refreshPrompts(station: Station)
 			on = false
 		elseif kind == "board" then
 			on = #items > 0 and Items.isIngredient(items[1])
+			if on then
+				holdPrompt.ActionText = boardAction(items)
+			end
 		elseif kind == "sauce" then
 			local item = items[1]
 			on = item ~= nil and Items.isDish(item) and item.state == "cooked" and Config.Dishes[item.kind].sauce
@@ -343,6 +388,7 @@ local function useSurface(player: Player, station: Station)
 	changed(station)
 	if COOKERS[station.kind] then
 		station.cookFactor = 1 - AnimalLooks.perksFor(player:GetAttribute("AnimalIndex")).cook
+		Stations.onSpend("power:" .. station.kind, 1)
 	end
 end
 
@@ -352,6 +398,7 @@ local function useCrate(player: Player, station: Station)
 		toast(player, "손이 비어야 꺼낼 수 있어요")
 	elseif ingredient then
 		give(player, Items.new(ingredient, "raw"))
+		Stations.onSpend("ing:" .. ingredient, 1)
 	end
 end
 
@@ -375,6 +422,7 @@ local function useTrash(player: Player)
 		if hand.contents then
 			Items.clearPlate(hand)
 			setHolding(player)
+			Stations.onSpend("trash", 1)
 		else
 			toast(player, "빈 쟁반은 쟁반 자리에 돌려놓아요")
 		end
@@ -386,6 +434,7 @@ local function useTrash(player: Player)
 		takeHeld(player)
 		Items.destroy(hand)
 		Remotes.sfx(player, "trash")
+		Stations.onSpend("trash", 1)
 	end
 end
 
@@ -448,6 +497,12 @@ local function useMachine(player: Player, station: Station)
 		toast(player, "손이 비어야 아이스크림을 만들 수 있어요")
 		return
 	end
+	-- 기계가 둘이라 다른 기계를 쓰던 중이면 그 기계는 놓아 준다(창은 하나)
+	for _, other in stations do
+		if other ~= station and other.kind == "icemachine" and other.user == player then
+			releaseMachine(other, false)
+		end
+	end
 	station.user = player
 	station.userSince = now()
 	refreshPrompts(station)
@@ -476,6 +531,12 @@ local function finishMachine(player: Player, value: unknown)
 				Remotes.sfx(player, "prep")
 				toast(player, `{Config.iceName(spec)} 완성! 녹기 전에 내요`)
 				Stations.onStat(player, "icecream", 1)
+				Stations.onSpend("ice:base", 1)
+				Stations.onSpend("ice:layer", #spec.flavors)
+				if spec.topping then
+					Stations.onSpend("ice:topping", 1)
+				end
+				Stations.onSpend("power:icemachine", 1)
 			end
 			return
 		end
@@ -546,6 +607,7 @@ local function wash(player: Player, station: Station)
 	changed(station)
 	toast(player, "뽀득뽀득! 설거지 끝")
 	Stations.onStat(player, "cleaned", 1)
+	Stations.onSpend("wash", 1)
 	Remotes.sfx(player, "clean")
 end
 
@@ -565,8 +627,9 @@ local function extinguish(player: Player, station: Station)
 	table.clear(station.items)
 	setFire(station, false)
 	changed(station)
-	Remotes.toast(nil, "불을 껐어요!")
+	Remotes.toast(nil, `불을 껐어요! 소화기 충전비 {Config.Costs.extinguisher}코인이 들어요`)
 	Stations.onStat(player, "fires", 1)
+	Stations.onSpend("extinguisher", 1)
 	Remotes.sfx(nil, "clean")
 end
 

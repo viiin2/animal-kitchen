@@ -108,9 +108,8 @@ end)
 Players.PlayerRemoving:Connect(Stations.drop)
 
 Remotes.Ready.OnServerEvent:Connect(Days.sendTo)
-Remotes.Start.OnServerEvent:Connect(function()
-	Days.start()
-end)
+-- 아침에는 바로 시작, 밤에는 준비(모두 준비하면 시작)
+Remotes.Start.OnServerEvent:Connect(Days.pressStart)
 Remotes.Buy.OnServerEvent:Connect(Days.buy)
 Remotes.PayDebt.OnServerEvent:Connect(Days.payDebt)
 -- 동물 고르기 창: 연 동물이면 바로 바꾼다(잠긴 동물은 게임패스, Avatars)
@@ -123,6 +122,7 @@ end)
 Avatars.onSwitch = Stations.drop
 Tables.onClear = Stations.giveDishes
 Stations.onStat = Days.stat
+Stations.onSpend = Days.spend
 Remotes.Tutorial.OnServerEvent:Connect(function(_player: Player, on: unknown)
 	if on == true then
 		Days.startTutorial()

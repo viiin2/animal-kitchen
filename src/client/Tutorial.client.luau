@@ -209,7 +209,7 @@ local steps: { Step } = {
 		end,
 	},
 	{
-		text = "첫 손님이 왔어요! 왼쪽 뒤 아이스크림 기계로 가서 E를 눌러요.",
+		text = "첫 손님이 왔어요! 뒷줄 양 끝의 아이스크림 기계(아무 쪽이나)로 가서 E를 눌러요.",
 		targets = stations("icemachine"),
 		done = function()
 			return player:GetAttribute("IceWindowOpen") == true

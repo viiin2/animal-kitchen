@@ -119,8 +119,7 @@ end
 local function pickMenu(p: Params): Config.MenuDef
 	local pool: { Config.MenuDef } = {}
 	for _, menu in p.menus do
-		table.insert(pool, menu)
-		if menu.day == p.newestDay and p.newestDay > 1 then
+		for _ = 1, Config.menuWeight(menu, p.newestDay) do
 			table.insert(pool, menu)
 		end
 	end

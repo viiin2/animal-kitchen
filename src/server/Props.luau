@@ -55,10 +55,6 @@ local function cabinet(parent: Model, at: CFrame, width: number, depth: number, 
 	for _, side in { -1, 1 } do
 		local x = side * (doorWidth / 2 + 0.1)
 		Build.part(parent, BLOCK, Vector3.new(doorWidth, h - 0.9, 0.06), at * CFrame.new(x, h / 2 + 0.1, -depth / 2 - 0.03), door)
-		if door == PINK then
-			-- 분홍 문짝에는 작은 흰 땡땡이
-			Build.polka(parent, at * CFrame.new(x, h / 2 + 0.1, -depth / 2 - 0.06), doorWidth - 0.3, h - 1.3, 0.55, 0.22, WHITE)
-		end
 		Build.ball(parent, 0.2, at * CFrame.new(side * 0.25, h / 2 + 0.4, -depth / 2 - 0.1), KNOB)
 	end
 	return Build.part(parent, BLOCK, Vector3.new(width, 0.3, depth + 0.1), at * CFrame.new(0, TOP - 0.15, -0.05), TOP_COLOR)
@@ -220,7 +216,8 @@ function Props.crate(at: CFrame, ingredient: string, tint: Color3, facing: Vecto
 end
 
 -- 아이스크림 기계: 흰 몸통에 맛별 노즐 네 개, 위에는 큰 아이스크림 장식
-function Props.iceMachine(at: CFrame): Built
+-- promptX: 프롬프트를 가운데에서 옆(기계 기준 x)으로 옮긴다(기계 한쪽이 옆 기구 줄 뒤에 들어가 있을 때 통로 쪽으로)
+function Props.iceMachine(at: CFrame, promptX: number?): Built
 	local m = model("IceCreamMachine")
 	cabinet(m, at, 6, 4, WHITE, PINK)
 	local body = Build.part(m, BLOCK, Vector3.new(5.4, 2.6, 2.6), at * CFrame.new(0, TOP + 1.3, 0.5), WHITE)
@@ -237,7 +234,7 @@ function Props.iceMachine(at: CFrame): Built
 	local root = sign.PrimaryPart :: BasePart
 	sign:PivotTo(at * CFrame.new(0, TOP + 2.65 + root.Size.Y / 2, 0.6))
 	sign.Parent = m
-	return { model = m, base = body, slots = {}, prompt = (at * CFrame.new(0, TOP + 0.6, -1.7)).Position }
+	return { model = m, base = body, slots = {}, prompt = (at * CFrame.new(promptX or 0, TOP + 0.6, -1.7)).Position }
 end
 
 -- 개수대: 하늘색 싱크볼, 금색 수도꼭지, 비누 거품. 빈 그릇을 세 개까지 넣고 F 길게로 설거지한다
