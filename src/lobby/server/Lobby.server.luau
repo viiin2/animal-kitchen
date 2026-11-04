@@ -167,15 +167,21 @@ local function render(pad: Pad, now: number)
 	local spec = pad.spec
 	local count = #pad.members
 	local size = Config.Lobby.teamSize
+	-- 글 대신 숫자: 👥 몇 명/정원, 사람이 있으면 분홍 배지에 남은 초
 	if pad.launching then
-		spec.label.Text = `가게 {spec.index}\n출발! 🍦`
+		spec.label.Text = "출발!"
+		spec.timer.Text = "🍦"
+		spec.timer.Visible = true
 		spec.ring.Color = RING_LAUNCH
 	elseif count == 0 then
-		spec.label.Text = `가게 {spec.index}\n올라오면 팀이 돼요 (1~{size}명)`
+		spec.label.Text = `👥 0/{size}`
+		spec.timer.Visible = false
 		spec.ring.Color = RING_EMPTY
 	else
 		local left = math.max(0, math.ceil((pad.departAt or now) - now))
-		spec.label.Text = `가게 {spec.index} · {count}/{size}명\n{left}초 뒤 출발!`
+		spec.label.Text = `👥 {count}/{size}`
+		spec.timer.Text = tostring(left)
+		spec.timer.Visible = true
 		spec.ring.Color = if count >= size then RING_FULL else RING_WAITING
 	end
 end

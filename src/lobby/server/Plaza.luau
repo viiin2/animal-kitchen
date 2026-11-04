@@ -10,8 +10,8 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local FoodModels = require(ReplicatedStorage.Shared.FoodModels)
 local City = require(script.Parent.City)
 
--- 발판 하나: 가운데(바닥), 상태 글(머리 위 팻말), 빛나는 테두리(상태에 따라 색이 바뀐다)
-export type PadSpec = { index: number, center: Vector3, label: TextLabel, ring: BasePart }
+-- 발판 하나: 가운데(바닥), 상태 글(간판 위 알약)과 남은 초 배지, 빛나는 테두리(상태에 따라 색이 바뀐다)
+export type PadSpec = { index: number, center: Vector3, label: TextLabel, timer: TextLabel, ring: BasePart }
 export type Built = { pads: { PadSpec } }
 
 local BLOCK = Enum.PartType.Block
@@ -89,7 +89,7 @@ local function mood()
 	tint.Parent = Lighting
 end
 
--- 발판 하나: 빛나는 테두리 위 둥근 판, 뒤에 가게 문 모양 아치("가게 1"), 위에 상태 팻말
+-- 발판 하나: 빛나는 테두리 위 둥근 판, 뒤에 가게 문 모양 아치("가게 1"), 그 위에 상태 팻말
 local function pad(parent: Instance, index: number, x: number): PadSpec
 	local center = Vector3.new(x, 0, PAD_Z)
 	local color = PAD_COLORS[(index - 1) % #PAD_COLORS + 1]
@@ -109,34 +109,71 @@ local function pad(parent: Instance, index: number, x: number): PadSpec
 	local board = solid(parent, Vector3.new(10.4, 1.8, 0.6), CFrame.lookAt(Vector3.new(x, 9.4, back), Vector3.new(x, 9.4, back + 1)), WHITE)
 	sign(board, { { text = `가게 {index}`, size = 0.9, color = CORAL } })
 
-	-- 상태 팻말(머리 위)
-	local anchor = Build.part(parent, BLOCK, Vector3.new(0.2, 0.2, 0.2), CFrame.new(x, 6, PAD_Z), WHITE)
+	-- 상태 팻말: "가게 N" 간판 바로 위에 작은 크림 알약(👥 0/4) + 오른쪽 위 동그란 분홍 배지(남은 초).
+	-- 예전엔 화면 픽셀 크기(260×74)에 글 두 줄이라 가까이서 넷이 겹치고 컸다. 크기를 스터드로 정해서
+	-- 멀어지면 같이 작아지고(발판 간격 18스터드 안에 들어간다), "가게 N"은 간판에 이미 있어 숫자만 띄운다.
+	-- 간판 위에 두어 발판에 선 사람 머리 위 기록 팻말과 겹치지 않는다.
+	local anchor = Build.part(parent, BLOCK, Vector3.new(0.2, 0.2, 0.2), CFrame.new(x, 11.8, back), WHITE)
 	anchor.Transparency = 1
 	local gui = Instance.new("BillboardGui")
-	gui.Size = UDim2.fromOffset(260, 74)
+	gui.Size = UDim2.fromScale(6, 2.4) -- 스터드
 	gui.MaxDistance = 140
 	gui.LightInfluence = 0
-	gui.AlwaysOnTop = true
+	local pill = Instance.new("Frame")
+	pill.AnchorPoint = Vector2.new(0.5, 1)
+	pill.Position = UDim2.fromScale(0.5, 1)
+	pill.Size = UDim2.fromScale(0.74, 0.6)
+	pill.BackgroundColor3 = Color3.fromRGB(255, 251, 244)
+	pill.BorderSizePixel = 0
+	local pillRound = Instance.new("UICorner")
+	pillRound.CornerRadius = UDim.new(0.5, 0)
+	pillRound.Parent = pill
+	local pillEdge = Instance.new("UIStroke")
+	pillEdge.Color = color
+	pillEdge.Thickness = 2.5
+	pillEdge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	pillEdge.Parent = pill
+	pill.Parent = gui
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.fromScale(1, 1)
-	label.BackgroundColor3 = Color3.fromRGB(255, 251, 244)
-	label.BackgroundTransparency = 0.05
-	label.Font = Enum.Font.GothamBold
-	label.TextSize = 20
+	label.AnchorPoint = Vector2.new(0.5, 0.5)
+	label.Position = UDim2.fromScale(0.5, 0.5)
+	label.Size = UDim2.fromScale(0.8, 0.66)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
 	label.TextColor3 = Color3.fromRGB(86, 66, 56)
-	label.TextWrapped = true
 	label.Text = ""
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 16)
-	corner.Parent = label
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = color
-	stroke.Thickness = 3
-	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	stroke.Parent = label
-	label.Parent = gui
+	label.Parent = pill
+	local timer = Instance.new("TextLabel")
+	timer.AnchorPoint = Vector2.new(0.5, 0.5)
+	timer.Position = UDim2.fromScale(0.86, 0.36)
+	timer.Size = UDim2.fromScale(0.6, 0.6)
+	timer.SizeConstraint = Enum.SizeConstraint.RelativeYY -- 동그랗게
+	timer.Rotation = -10
+	timer.BackgroundColor3 = Color3.fromRGB(240, 128, 160)
+	timer.BorderSizePixel = 0
+	timer.Font = Enum.Font.FredokaOne
+	timer.TextScaled = true
+	timer.TextColor3 = WHITE
+	timer.Text = ""
+	timer.Visible = false
+	local timerRound = Instance.new("UICorner")
+	timerRound.CornerRadius = UDim.new(0.5, 0)
+	timerRound.Parent = timer
+	local timerEdge = Instance.new("UIStroke")
+	timerEdge.Color = WHITE
+	timerEdge.Thickness = 2
+	timerEdge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	timerEdge.Parent = timer
+	local timerPad = Instance.new("UIPadding")
+	timerPad.PaddingTop = UDim.new(0.2, 0)
+	timerPad.PaddingBottom = UDim.new(0.2, 0)
+	timerPad.PaddingLeft = UDim.new(0.16, 0)
+	timerPad.PaddingRight = UDim.new(0.16, 0)
+	timerPad.Parent = timer
+	timer.Parent = gui
 	gui.Parent = anchor
-	return { index = index, center = center, label = label, ring = ring }
+	return { index = index, center = center, label = label, timer = timer, ring = ring }
 end
 
 function Plaza.build(): Built
