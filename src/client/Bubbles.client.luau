@@ -5,7 +5,8 @@
 -- 단체 손님은 주문 그림이 여러 개 나란히 나오고, 낸 것은 흐려지며 ✓가 붙는다. 일행(Companion)은 말풍선이 없다.
 -- 골치 아픈 손님은 속성 Note("급해요!"·"주문 바꿈!"·"떨어뜨렸어요!")를 이름 앞에 붉게 보여 준다.
 -- 손님에게 내서 코인을 벌면 그 자리 위에 "+코인"이 떠오른다(Remotes.Earned).
--- 몸짓: 말풍선은 뽀용 튀어나오고, 인내심이 1/4 아래면 좌우로 흔들리며 💢가 붙는다. 받으면 하트가 몽글몽글 떠오른다.
+-- 몸짓: 말풍선은 뽀용 튀어나오고, 인내심이 1/4 아래면 말풍선이 흔들리고 손님 이마에 💢(빡침)가 불끈불끈.
+-- 화나서 나갈 때도 이마에 💢. 받으면 하트가 몽글몽글 떠오른다.
 local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
@@ -24,7 +25,8 @@ type Bubble = {
 	gui: BillboardGui,
 	card: Frame,
 	pop: UIScale,
-	anger: TextLabel,
+	vein: BillboardGui, -- 이마의 💢
+	veinMark: TextLabel,
 	feeling: string, -- 마지막으로 본 Mood
 	cells: Frame,
 	title: TextLabel,
@@ -230,21 +232,28 @@ local function make(model: Model)
 	pop.Parent = card
 	local moodPop = Instance.new("UIScale")
 	moodPop.Parent = mood
-	-- 💢: 인내심이 1/4 아래면 말풍선 오른쪽 위에 붙는다
-	local anger = Instance.new("TextLabel")
-	anger.BackgroundTransparency = 1
-	anger.AnchorPoint = Vector2.new(0.5, 0.5)
-	anger.Position = UDim2.fromScale(0.97, 0.05)
-	anger.Size = UDim2.fromScale(0.34, 0.42)
-	anger.SizeConstraint = Enum.SizeConstraint.RelativeYY
-	anger.TextScaled = true
-	anger.Text = "💢"
-	anger.Visible = false
-	anger.ZIndex = 3
-	anger.Parent = card
+	-- 💢: 이마(머리 오른쪽 위)에 붙는다. 머리를 못 찾으면 발밑 기준으로 머리 높이에
+	local head = model:WaitForChild("Head", 2)
+	local vein = Instance.new("BillboardGui")
+	vein.Name = "AngerVein"
+	vein.Adornee = if head and head:IsA("BasePart") then head else root
+	vein.Size = UDim2.new(1.4, 0, 1.4, 0)
+	vein.StudsOffset = if head then Vector3.new(0.85, 0.85, 0) else Vector3.new(0.85, 4.5, 0)
+	vein.AlwaysOnTop = true
+	vein.LightInfluence = 0
+	vein.Enabled = false
+	local veinMark = Instance.new("TextLabel")
+	veinMark.BackgroundTransparency = 1
+	veinMark.AnchorPoint = Vector2.new(0.5, 0.5)
+	veinMark.Position = UDim2.fromScale(0.5, 0.5)
+	veinMark.Size = UDim2.fromScale(1, 1)
+	veinMark.TextScaled = true
+	veinMark.Text = "💢"
+	veinMark.Parent = vein
+	vein.Parent = playerGui
 
 	gui.Parent = playerGui
-	local bubble: Bubble = { gui = gui, card = card, pop = pop, anger = anger, feeling = "", cells = cells, title = title, fill = fill, mood = mood, orders = "" }
+	local bubble: Bubble = { gui = gui, card = card, pop = pop, vein = vein, veinMark = veinMark, feeling = "", cells = cells, title = title, fill = fill, mood = mood, orders = "" }
 	bubbles[model] = bubble
 
 	local function refresh()
@@ -277,10 +286,9 @@ local function make(model: Model)
 			mood.Text = "♥"
 			mood.TextColor3 = Color3.fromRGB(240, 110, 120)
 		elseif feeling == "angry" then
+			-- 화나서 나간다: 말풍선 대신 이마의 💢(RenderStepped)
 			card.Visible = false
-			mood.Visible = true
-			mood.Text = "💢"
-			mood.TextColor3 = BAD
+			mood.Visible = false
 		elseif feeling == "table" then
 			-- 받았는데 앉을 홀 테이블이 없다
 			card.Visible = false
@@ -319,6 +327,7 @@ local function remove(model: Model)
 	local bubble = bubbles[model]
 	if bubble then
 		bubble.gui:Destroy()
+		bubble.vein:Destroy()
 		bubbles[model] = nil
 	end
 end
@@ -352,11 +361,13 @@ RunService.RenderStepped:Connect(function()
 			bubble.fill.BackgroundColor3 = if left > 0.5 then GOOD elseif left > 0.25 then WARN else BAD
 			hurry = left < 0.25 and bubble.feeling == "waiting"
 		end
-		-- 거의 다 기다렸으면 말풍선이 흔들리고 💢가 콩콩
+		-- 거의 다 기다렸으면 말풍선이 흔들리고, 이마에 💢가 불끈불끈(화나서 나갈 때도)
 		bubble.card.Rotation = if hurry then math.sin(clock * 18) * 5 else 0
-		bubble.anger.Visible = hurry
-		if hurry then
-			bubble.anger.Rotation = math.sin(clock * 9) * 12
+		local mad = hurry or bubble.feeling == "angry"
+		bubble.vein.Enabled = mad
+		if mad then
+			local throb = 0.8 + 0.2 * math.abs(math.sin(clock * 7))
+			bubble.veinMark.Size = UDim2.fromScale(throb, throb)
 		end
 	end
 end)

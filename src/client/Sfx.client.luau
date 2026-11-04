@@ -94,9 +94,12 @@ stateEvent.OnClientEvent:Connect(function(state: { phase: string, endsAt: number
 	local phase = state.phase
 	if phase ~= lastPhase then
 		if phase == "countdown" then
+			-- 3·2·1이 보일 때만 째깍(그 전에는 날짜 커튼이 지나간다)
 			local left = math.max(0, state.endsAt - workspace:GetServerTimeNow())
 			for i = 0, math.floor(left) - 1 do
-				task.delay(left - math.floor(left) + i, play, "tick")
+				if math.floor(left) - i <= Config.CountdownSeconds then
+					task.delay(left - math.floor(left) + i, play, "tick")
+				end
 			end
 		elseif phase == "open" then
 			play("start")

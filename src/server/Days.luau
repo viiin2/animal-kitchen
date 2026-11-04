@@ -253,13 +253,16 @@ end
 local function applyEffects()
 	local d = upcomingDay()
 	local unlocked: { [string]: boolean } = {}
+	local hints: { [string]: string } = {} -- 잠긴 기구 위 🔒 알약에 쓸 말
 	for id, openDay in unlockDays() do
 		unlocked[id] = openDay <= d
+		hints[id] = `DAY {openDay}부터`
 	end
 	for _, upgrade in Config.Upgrades do
 		unlocked["up:" .. upgrade.id] = level(upgrade.id) > 0
+		hints["up:" .. upgrade.id] = `상점: {upgrade.name}`
 	end
-	Stations.applyUnlocks(unlocked)
+	Stations.applyUnlocks(unlocked, hints)
 	Stations.setModifiers({
 		cook = 1 - 0.12 * level("cook"),
 		burn = 1 + 0.4 * level("burn"),
@@ -392,7 +395,8 @@ function Days.start()
 	if phase ~= "morning" and phase ~= "night" then
 		return
 	end
-	if phase == "night" then
+	local newDay = phase == "night"
+	if newDay then
 		day = nextDay
 	end
 	phase = "countdown"
@@ -405,7 +409,8 @@ function Days.start()
 	Stations.reset()
 	Tables.reset()
 	applyEffects()
-	endsAt = now() + Config.CountdownSeconds
+	-- 밤에서 넘어오면 날짜 커튼이 먼저 지나가고(클라이언트) 그 뒤에 3·2·1
+	endsAt = now() + Config.CountdownSeconds + (if newDay then Config.CurtainSeconds else 0)
 	daySeconds = Config.dayParams(day, playerCount()).seconds
 	broadcast()
 end

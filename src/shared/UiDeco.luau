@@ -79,16 +79,37 @@ function UiDeco.header(window: GuiObject, height: number, radius: number, inset:
 end
 
 -- ── 창 말랑 팝 ──
--- 창의 UIScale(화면 크기 맞춤용)을 잠깐 줄였다가 통 튀어 target으로(열기), 쏙 줄인 뒤 done(닫기).
+-- 창의 UIScale(화면 크기 맞춤용)을 잠깐 줄였다가 통 튀어 원래 크기로(열기), 쏙 줄인 뒤 done(닫기).
+-- 화면 크기에 맞춘 값은 fit으로 넣는다: 팝 도중에 값을 바로 바꾸면 크기가 덜컹거려서, 팝이 끝난 뒤에 맞춘다.
 -- 닫는 중에 다시 열면 닫기는 취소된다.
 local popSeq: { [UIScale]: number } = {}
 local closing: { [UIScale]: boolean } = {}
+local popping: { [UIScale]: boolean } = {}
+local rest: { [UIScale]: number } = {} -- 팝이 끝나면 돌아갈 크기(화면 맞춤 값)
 
-function UiDeco.popIn(scale: UIScale, target: number)
-	popSeq[scale] = (popSeq[scale] or 0) + 1
+function UiDeco.fit(scale: UIScale, value: number)
+	rest[scale] = value
+	if not popping[scale] then
+		scale.Scale = value
+	end
+end
+
+function UiDeco.popIn(scale: UIScale, target: number?)
+	local goal = target or rest[scale] or scale.Scale
+	rest[scale] = goal
+	local seq = (popSeq[scale] or 0) + 1
+	popSeq[scale] = seq
 	closing[scale] = nil
-	scale.Scale = target * 0.7
-	TweenService:Create(scale, TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = target }):Play()
+	popping[scale] = true
+	scale.Scale = goal * 0.7
+	local tween = TweenService:Create(scale, TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = goal })
+	tween.Completed:Once(function()
+		if popSeq[scale] == seq then
+			popping[scale] = nil
+			scale.Scale = rest[scale] or goal
+		end
+	end)
+	tween:Play()
 end
 
 function UiDeco.popOut(scale: UIScale, done: () -> ())
@@ -98,13 +119,15 @@ function UiDeco.popOut(scale: UIScale, done: () -> ())
 	local seq = (popSeq[scale] or 0) + 1
 	popSeq[scale] = seq
 	closing[scale] = true
-	local target = scale.Scale
-	local tween = TweenService:Create(scale, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.In), { Scale = target * 0.6 })
+	popping[scale] = true
+	local base = rest[scale] or scale.Scale
+	local tween = TweenService:Create(scale, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.In), { Scale = base * 0.6 })
 	tween.Completed:Once(function()
 		if popSeq[scale] == seq then
 			closing[scale] = nil
+			popping[scale] = nil
 			done()
-			scale.Scale = target -- 다음에 열 때를 위해 되돌린다(이미 숨겨져서 안 보인다)
+			scale.Scale = rest[scale] or base -- 다음에 열 때를 위해 되돌린다(이미 숨겨져서 안 보인다)
 		end
 	end)
 	tween:Play()

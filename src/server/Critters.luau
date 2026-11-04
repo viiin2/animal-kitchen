@@ -32,7 +32,8 @@ local SHIRTS = {
 function Critters.customer(): Model
 	local model = Build.model("Customer", Vector3.new(2.4, 0.2, 2.4))
 	local look = AnimalLooks.list[rng:NextInteger(1, #AnimalLooks.list)]
-	AnimalLooks.paint(model, look, { chef = false, shirt = SHIRTS[rng:NextInteger(1, #SHIRTS)] })
+	local head = AnimalLooks.paint(model, look, { chef = false, shirt = SHIRTS[rng:NextInteger(1, #SHIRTS)] })
+	head.Name = "Head" -- 화나면 클라이언트(Bubbles)가 이마에 💢를 붙인다
 	local root = model.PrimaryPart :: BasePart
 	local body = Instance.new("Part")
 	body.Name = "Body"

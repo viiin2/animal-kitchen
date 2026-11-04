@@ -45,6 +45,7 @@ type Station = {
 	fire: Fire?,
 	user: Player?, -- 아이스크림 기계를 쓰는 사람
 	userSince: number,
+	lockSign: BillboardGui?, -- 잠겼을 때 위에 뜨는 "🔒 …" 알약(덮개가 없는 기구)
 }
 
 export type Modifiers = { cook: number, burn: number, prep: number }
@@ -788,7 +789,50 @@ function Stations.setModifiers(next: Modifiers)
 end
 
 -- 잠금 풀기. unlocked에 있는 이름만 열린다. 잠긴 기구는 안내 글 없이 눌러도 반응하지 않고, 재료 상자는 천으로 덮는다.
-function Stations.applyUnlocks(unlocked: { [string]: boolean })
+-- 잠긴 기구 위 알약: 잠긴 줄 모르고 "고장 났나?" 했다(세 번째 티 냄비). 덮개가 있는 재료 상자는 덮개로 충분하다.
+local function lockSign(station: Station, hint: string): BillboardGui
+	local sign: BillboardGui
+	local existing = station.lockSign
+	if existing then
+		sign = existing
+	else
+		local gui = Instance.new("BillboardGui")
+		gui.Name = "LockSign"
+		gui.Size = UDim2.new(4.6, 0, 0.85, 0)
+		gui.StudsOffset = Vector3.new(0, 2.6, 0)
+		gui.MaxDistance = 90
+		gui.LightInfluence = 0
+		local pill = Instance.new("TextLabel")
+		pill.Name = "Text"
+		pill.Size = UDim2.fromScale(1, 1)
+		pill.BackgroundColor3 = Color3.fromRGB(255, 250, 244)
+		pill.BackgroundTransparency = 0.1
+		pill.Font = Enum.Font.GothamBold
+		pill.TextScaled = true
+		pill.TextColor3 = Color3.fromRGB(150, 130, 118)
+		local round = Instance.new("UICorner")
+		round.CornerRadius = UDim.new(1, 0)
+		round.Parent = pill
+		local inset = Instance.new("UIPadding")
+		inset.PaddingLeft = UDim.new(0.06, 0)
+		inset.PaddingRight = UDim.new(0.06, 0)
+		inset.PaddingTop = UDim.new(0.14, 0)
+		inset.PaddingBottom = UDim.new(0.14, 0)
+		inset.Parent = pill
+		pill.Parent = gui
+		gui.Parent = station.base
+		station.lockSign = gui
+		sign = gui
+	end
+	local label = sign:FindFirstChild("Text")
+	if label and label:IsA("TextLabel") then
+		label.Text = `🔒 {hint}`
+	end
+	return sign
+end
+
+-- hints: 잠금 id마다 언제 열리는지("DAY 3부터", "상점: 티 냄비 추가")
+function Stations.applyUnlocks(unlocked: { [string]: boolean }, hints: { [string]: string }?)
 	washRule = unlocked["rule:wash"] == true
 	for _, station in stations do
 		local lockId = station.lockId
@@ -797,6 +841,10 @@ function Stations.applyUnlocks(unlocked: { [string]: boolean })
 		local cover = station.cover
 		if cover then
 			cover.Transparency = if locked then 0 else 1
+		elseif locked and lockId then
+			lockSign(station, (hints and hints[lockId]) or "아직 잠겨 있어요").Enabled = true
+		elseif station.lockSign then
+			station.lockSign.Enabled = false
 		end
 		local tag = station.tag
 		if tag then
@@ -904,6 +952,7 @@ function Stations.init(layout: Store.Layout)
 			fire = nil,
 			user = nil,
 			userSince = 0,
+			lockSign = nil,
 		}
 
 		if spec.kind == "board" then

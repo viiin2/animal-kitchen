@@ -20,6 +20,8 @@ local UserInputService = game:GetService("UserInputService")
 local Config = require(ReplicatedStorage.Shared.Config)
 local FoodModels = require(ReplicatedStorage.Shared.FoodModels)
 local UiDeco = require(ReplicatedStorage.Shared.UiDeco)
+local AnimalLooks = require(ReplicatedStorage.Shared.AnimalLooks)
+local Build = require(ReplicatedStorage.Shared.Build)
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local stateEvent = remotes:WaitForChild(Config.Remotes.State) :: RemoteEvent
 local toastEvent = remotes:WaitForChild(Config.Remotes.Toast) :: RemoteEvent
@@ -303,16 +305,22 @@ toast.BackgroundTransparency = 0.15
 corner(toast, 21)
 toast.Visible = false
 
--- ── 오른쪽 버튼: 레시피북 · 말풍선 · 카메라 · 배경음악 · 끼었어요 ──
--- 글자 버튼이 화면을 많이 차지해서 작은 동그란 아이콘으로 두고, 단축키는 작은 배지, 이름은 마우스를 올리면 보인다.
-
+-- ── 오른쪽 버튼: 레시피북 · 말풍선 · 카메라 · 배경음악 · 끼었어요 (+ 관리자 🛠) ──
+-- 동그란 버튼이 하나씩 떠 있고 단축키 배지까지 붙어 지저분했다. 크림색 막대 하나에 아이콘만 담고,
+-- 이름과 단축키는 마우스를 올리면 보인다. 관리자 버튼은 🛠 하나로 접어 둔다.
+local DOCK_PAD = 4
 local side = Instance.new("Frame")
-side.BackgroundTransparency = 1
 side.AnchorPoint = Vector2.new(1, 0)
 side.Position = UDim2.new(1, -10, 0, 60)
-side.Size = UDim2.fromOffset(46, 7 * 46 + 6 * 8)
+side.Size = UDim2.fromOffset(46 + DOCK_PAD * 2, 0)
+side.AutomaticSize = Enum.AutomaticSize.Y
+side.BackgroundColor3 = PAPER
+side.BorderSizePixel = 0
+corner(side, 27)
+stroke(side)
+pad(side, DOCK_PAD, DOCK_PAD)
 side.Parent = gui
-list(side, Enum.FillDirection.Vertical, 8)
+list(side, Enum.FillDirection.Vertical, 2).HorizontalAlignment = Enum.HorizontalAlignment.Center
 
 local tip = text(gui, "", 16, WHITE)
 tip.TextWrapped = false -- 버튼에 붙여 띄울 때 버튼 폭에 맞춰 한 글자씩 줄이 바뀌지 않게(글자 길이만큼 넓어진다)
@@ -325,36 +333,39 @@ corner(tip, 16)
 pad(tip, 10, 0)
 tip.Visible = false
 
-local function iconButton(icon: string, key: string, name: string, order: number): TextButton
-	local b = button(side, icon, UDim2.fromOffset(46, 46), PAPER, INK)
+local HOVER_FILL = Color3.fromRGB(255, 236, 242)
+
+-- 막대 안 아이콘 버튼: 배경 없이 아이콘만, 마우스를 올리면 연분홍 동그라미와 이름(단축키) 말풍선
+local function iconButton(icon: string, key: string, name: string, order: number, parent: Instance?): TextButton
+	local b = button(parent or side, icon, UDim2.fromOffset(46, 46), HOVER_FILL, INK)
+	b.BackgroundTransparency = 1
 	b.LayoutOrder = order
 	b.TextSize = 22
 	b.Font = Enum.Font.GothamBold
-	corner(b, 23)
-	stroke(b)
-	if key ~= "" then
-		local badge = text(b, key, 10, WHITE)
-		badge.AnchorPoint = Vector2.new(1, 1)
-		badge.Position = UDim2.new(1, 4, 1, 4)
-		badge.AutomaticSize = Enum.AutomaticSize.X
-		badge.Size = UDim2.fromOffset(0, 16)
-		badge.BackgroundColor3 = CORAL
-		badge.BackgroundTransparency = 0
-		corner(badge, 8)
-		pad(badge, 4, 0)
+	local round = b:FindFirstChildOfClass("UICorner") -- button()이 단 둥근 모서리를 동그라미로
+	if round then
+		round.CornerRadius = UDim.new(0, 23)
 	end
 	b.MouseEnter:Connect(function()
+		b.BackgroundTransparency = 0
 		tip.Text = b:GetAttribute("Tip") :: string? or name
-		-- 버튼에 붙여 바로 왼쪽에 띄운다. AbsolutePosition으로 계산하면 이 화면(IgnoreGuiInset)에서는
-		-- 위쪽 메뉴 바 높이만큼 위로 밀려 화면 끝에 잘렸다.
+		-- 버튼에 붙여 띄운다(막대 안이면 왼쪽, 관리자 줄이면 아래). AbsolutePosition으로 계산하면
+		-- 이 화면(IgnoreGuiInset)에서는 위쪽 메뉴 바 높이만큼 위로 밀려 화면 끝에 잘렸다.
 		tip.Parent = b
-		tip.Position = UDim2.new(0, -8, 0.5, 0)
+		if b.Parent == side then
+			tip.AnchorPoint = Vector2.new(1, 0.5)
+			tip.Position = UDim2.new(0, -12, 0.5, 0)
+		else
+			tip.AnchorPoint = Vector2.new(0.5, 0)
+			tip.Position = UDim2.new(0.5, 0, 1, 10)
+		end
 		tip.Visible = true
 	end)
 	b.MouseLeave:Connect(function()
+		b.BackgroundTransparency = 1
 		tip.Visible = false
 	end)
-	b:SetAttribute("Tip", name)
+	b:SetAttribute("Tip", if key ~= "" then `{name} ({key})` else name)
 	return b
 end
 
@@ -370,20 +381,35 @@ musicButton.Activated:Connect(function()
 	musicButton:SetAttribute("Tip", if off then "배경음악 켜기" else "배경음악 끄기")
 end)
 -- 구석에 끼었을 때 처음 자리로(들고 있는 것은 그대로)
-local unstuckButton = iconButton("🆘", "", "끼었어요: 처음 자리로", 5)
+local unstuckButton = iconButton("🏠", "", "끼었어요: 처음 자리로", 5)
 unstuckButton.Activated:Connect(function()
 	unstuckEvent:FireServer()
 end)
--- 관리자만 보이는 버튼(테스트용). 서버가 다시 관리자인지 확인한다.
+-- 관리자만 보이는 버튼(테스트용). 🛠을 누르면 왼쪽에 작은 줄로 펼쳐진다. 서버가 다시 관리자인지 확인한다.
 --   ⏹ 영업 그만하기(영업·튜토리얼 중에만): 정산 없이 같은 DAY 아침으로
 --   ⏭ DAY 패스: 아침·밤이면 정산 없이 다음 DAY 아침으로, 영업 중이면 바로 마감(정산은 그대로)
-local stopButton = iconButton("⏹", "", "관리자: 영업 그만하기", 6)
-local adminButton = iconButton("⏭", "", "관리자: DAY 패스", 7)
--- 💰 코인 받기(개발자용): 누르면 왼쪽에 작은 창. 칸에 적은 만큼(음수면 뺀다) 또는 +100·+1000·+10000을 바로 받는다.
-local coinAdminButton = iconButton("💰", "", "관리자: 코인 받기", 8)
-local coinAdmin = frame(coinAdminButton, UDim2.fromOffset(250, 104))
+--   💰 코인 받기(개발자용): 칸에 적은 만큼(음수면 뺀다) 또는 +100·+1000·+10000을 바로 받는다
+local adminDivider = Instance.new("Frame")
+adminDivider.Size = UDim2.fromOffset(30, 2)
+adminDivider.BackgroundColor3 = LINE
+adminDivider.BorderSizePixel = 0
+adminDivider.LayoutOrder = 6
+adminDivider.Parent = side
+local adminToggle = iconButton("🛠", "", "관리자 메뉴", 7)
+local adminMenu = frame(adminToggle, UDim2.fromOffset(0, 46 + DOCK_PAD * 2))
+adminMenu.AnchorPoint = Vector2.new(1, 0.5)
+adminMenu.Position = UDim2.new(0, -10, 0.5, 0)
+adminMenu.AutomaticSize = Enum.AutomaticSize.X
+corner(adminMenu, 27)
+pad(adminMenu, DOCK_PAD, DOCK_PAD)
+list(adminMenu, Enum.FillDirection.Horizontal, 2)
+adminMenu.Visible = false
+local stopButton = iconButton("⏹", "", "영업 그만하기", 1, adminMenu)
+local adminButton = iconButton("⏭", "", "DAY 패스", 2, adminMenu)
+local coinAdminButton = iconButton("💰", "", "코인 받기", 3, adminMenu)
+local coinAdmin = frame(adminMenu, UDim2.fromOffset(250, 104))
 coinAdmin.AnchorPoint = Vector2.new(1, 0)
-coinAdmin.Position = UDim2.new(0, -10, 0, 0)
+coinAdmin.Position = UDim2.new(1, 0, 1, 8)
 coinAdmin.Visible = false
 pad(coinAdmin, 10, 8)
 local coinAdminTitle = text(coinAdmin, "코인 받기 (개발자용)", 14, MUTED)
@@ -431,13 +457,20 @@ end
 coinAdminButton.Activated:Connect(function()
 	coinAdmin.Visible = not coinAdmin.Visible
 end)
+adminToggle.Activated:Connect(function()
+	adminMenu.Visible = not adminMenu.Visible
+	if not adminMenu.Visible then
+		coinAdmin.Visible = false
+	end
+end)
 local function updateAdmin()
 	local admin = player:GetAttribute("Admin") == true
 	local playing = state.phase == "open" or state.phase == "countdown" or state.phase == "tutorial"
-	adminButton.Visible = admin
-	stopButton.Visible = admin and playing
-	coinAdminButton.Visible = admin
+	adminDivider.Visible = admin
+	adminToggle.Visible = admin
+	stopButton.Visible = playing
 	if not admin then
+		adminMenu.Visible = false
 		coinAdmin.Visible = false
 	end
 end
@@ -488,7 +521,7 @@ end)
 local function updateCameraTip()
 	for _, mode in Config.CameraModes do
 		if mode.id == player:GetAttribute("CameraMode") then
-			cameraButton:SetAttribute("Tip", `카메라: {mode.name}`)
+			cameraButton:SetAttribute("Tip", `카메라: {mode.name} (C)`)
 		end
 	end
 end
@@ -544,7 +577,7 @@ local function toggleRecipe()
 		recipe.Visible = true
 		chatMenu.Visible = false
 		if recipeScale then
-			UiDeco.popIn(recipeScale, recipeScale.Scale)
+			UiDeco.popIn(recipeScale)
 		end
 	elseif recipeScale then
 		UiDeco.popOut(recipeScale, function()
@@ -600,21 +633,6 @@ recordLabel.AnchorPoint = Vector2.new(1, 0)
 recordLabel.Position = UDim2.fromScale(1, 0)
 recordLabel.Size = UDim2.fromOffset(380, 42)
 recordLabel.TextXAlignment = Enum.TextXAlignment.Right
-local recordPop = Instance.new("UIScale")
-recordPop.Parent = recordLabel
-local recordTween: Tween? = nil
--- 신기록이면 🏆 글자가 콩닥콩닥 커졌다 작아졌다
-local function shineRecord(on: boolean)
-	if on and not recordTween then
-		local tween = TweenService:Create(recordPop, TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Scale = 1.12 })
-		tween:Play()
-		recordTween = tween
-	elseif not on and recordTween then
-		recordTween:Cancel()
-		recordTween = nil
-		recordPop.Scale = 1
-	end
-end
 
 -- ── 새 규칙·새 메뉴 카드 꾸미기 ──
 -- 플레이 테스트: 흰 네모 사진 + 글만 있어서 "쇼핑몰 상품 목록" 같았다. 다른 창처럼 아기 분홍·하늘 파스텔에
@@ -953,6 +971,292 @@ end
 local ledgerIn = ledgerColumn(1)
 local ledgerOut = ledgerColumn(2)
 
+-- ── 파산 결과창: 문 닫은 아이스크림 가게(빨간 압류 딱지, 셔터, 비뚤어진 간판, 찢어진 차양) 앞에서
+-- 꼬질꼬질 기운 옷을 입은 우리 동물들이 먹구름 아래 엉엉 운다(분수 눈물). 창이 뜰 때 "파산" 도장이 쾅!
+local BROKE_HEIGHT = 262
+local SIDEWALK = 40
+local SEIZED = Color3.fromRGB(214, 40, 52) -- 압류 딱지 빨강
+local brokeScene = frame(summaryBox, UDim2.new(1, -12, 0, BROKE_HEIGHT))
+brokeScene.BackgroundColor3 = Color3.fromRGB(196, 202, 222)
+brokeScene.LayoutOrder = -1
+brokeScene.Visible = false
+local skyGradient = Instance.new("UIGradient") -- 우중충한 하늘: 위는 진한 회청색
+skyGradient.Rotation = 90
+skyGradient.Color = ColorSequence.new(Color3.fromRGB(150, 158, 186), Color3.fromRGB(222, 226, 238))
+skyGradient.Parent = brokeScene
+
+local function rect(parent: Instance, x: number, y: number, w: number, h: number, color: Color3, z: number, radius: number?): Frame
+	local f = Instance.new("Frame")
+	f.Position = UDim2.fromOffset(x, y)
+	f.Size = UDim2.fromOffset(w, h)
+	f.BackgroundColor3 = color
+	f.BorderSizePixel = 0
+	f.ZIndex = z
+	if radius then
+		corner(f, radius)
+	end
+	f.Parent = parent
+	return f
+end
+
+-- 빨간 압류 딱지(하얀 테두리, 비뚤게)
+local function seizedSticker(parent: Instance, x: number, y: number, w: number, h: number, size: number, rotation: number, z: number): Frame
+	local sticker = rect(parent, x, y, w, h, SEIZED, z, 6)
+	sticker.AnchorPoint = Vector2.new(0.5, 0.5)
+	sticker.Rotation = rotation
+	local edge = Instance.new("UIStroke")
+	edge.Color = WHITE
+	edge.Thickness = 3
+	edge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	edge.Parent = sticker
+	local label = text(sticker, "압 류", size, WHITE, ROUND)
+	label.Size = UDim2.fromScale(1, 1)
+	label.ZIndex = z
+	return sticker
+end
+
+-- 인도(아래 둥근 모서리만)
+local sidewalk = rect(brokeScene, 0, 0, 0, 0, Color3.fromRGB(208, 208, 216), 1, 16)
+sidewalk.Position = UDim2.new(0, 0, 1, -SIDEWALK)
+sidewalk.Size = UDim2.new(1, 0, 0, SIDEWALK)
+local sidewalkTop = rect(brokeScene, 0, 0, 0, 0, Color3.fromRGB(208, 208, 216), 1)
+sidewalkTop.Position = UDim2.new(0, 0, 1, -SIDEWALK)
+sidewalkTop.Size = UDim2.new(1, 0, 0, 18)
+for i = 1, 13 do
+	local seam = rect(brokeScene, 0, 0, 2, SIDEWALK, Color3.fromRGB(226, 226, 232), 1)
+	seam.Position = UDim2.new(i / 14, 0, 1, -SIDEWALK)
+end
+
+-- 가게(가운데, 인도 위에 선다)
+local SHOP_W, SHOP_H = 560, 214
+local shop = Instance.new("Frame")
+shop.BackgroundTransparency = 1
+shop.AnchorPoint = Vector2.new(0.5, 1)
+shop.Position = UDim2.new(0.5, 0, 1, -SIDEWALK)
+shop.Size = UDim2.fromOffset(SHOP_W, SHOP_H)
+shop.ZIndex = 2
+shop.Parent = brokeScene
+rect(shop, 20, 66, SHOP_W - 40, SHOP_H - 66, Color3.fromRGB(226, 190, 202), 2, 6) -- 빛바랜 분홍 벽
+rect(shop, 10, 60, SHOP_W - 20, 10, Color3.fromRGB(200, 160, 176), 3, 4)
+-- 셔터(내려 닫음)
+local shutter = rect(shop, 112, 112, SHOP_W - 224, SHOP_H - 112, Color3.fromRGB(178, 180, 192), 3)
+for i = 1, 8 do
+	rect(shutter, 0, i * 12, SHOP_W - 224, 2, Color3.fromRGB(148, 150, 164), 3)
+end
+-- 양옆 창문: X자 노란 테이프 + 작은 압류 딱지, 왼쪽 벽에는 "임대 문의"
+for _, x in { 38, SHOP_W - 100 } do
+	local glass = rect(shop, x, 118, 62, 62, Color3.fromRGB(132, 142, 166), 3, 4)
+	for _, angle in { 40, -40 } do
+		local tape = rect(glass, 31, 31, 84, 10, Color3.fromRGB(250, 214, 90), 4)
+		tape.AnchorPoint = Vector2.new(0.5, 0.5)
+		tape.Rotation = angle
+	end
+	seizedSticker(glass, 31, 50, 46, 22, 13, if x < 100 then -8 else 10, 5)
+end
+local forRent = rect(shop, 26, 78, 52, 34, WHITE, 4, 3)
+forRent.Rotation = -5
+local forRentText = text(forRent, "임대 문의", 12, INK)
+forRentText.Size = UDim2.fromScale(1, 1)
+forRentText.ZIndex = 4
+-- 찢어져 한쪽이 처진 줄무늬 차양
+local awning = Instance.new("Frame")
+awning.BackgroundTransparency = 1
+awning.Position = UDim2.fromOffset(0, 70)
+awning.Size = UDim2.fromOffset(SHOP_W, 30)
+awning.Rotation = 3
+awning.ZIndex = 4
+awning.Parent = shop
+for i = 0, 9 do
+	local color = if i % 2 == 0 then Color3.fromRGB(226, 146, 166) else Color3.fromRGB(246, 238, 240)
+	rect(awning, i * 56, 0, 56, 26, color, 4)
+	local scallop = rect(awning, i * 56 + 28, 26, 44, 44, color, 4, 22)
+	scallop.AnchorPoint = Vector2.new(0.5, 0.5)
+end
+-- 비뚤어진 간판 + 커다란 압류 딱지
+local sign = rect(shop, SHOP_W / 2, 32, 340, 54, Color3.fromRGB(252, 244, 232), 5, 12)
+sign.AnchorPoint = Vector2.new(0.5, 0.5)
+sign.Rotation = -6
+local signEdge = Instance.new("UIStroke")
+signEdge.Color = Color3.fromRGB(200, 160, 176)
+signEdge.Thickness = 3
+signEdge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+signEdge.Parent = sign
+local signText = text(sign, "🍦 아이스크림 가게", 22, Color3.fromRGB(150, 120, 130), ROUND)
+signText.Position = UDim2.fromOffset(14, 0)
+signText.Size = UDim2.new(1, -120, 1, 0)
+signText.ZIndex = 5
+seizedSticker(sign, 280, 30, 112, 50, 30, 12, 6)
+
+-- 우는 동물들(가게 앞 인도에 선다)
+local brokeDolls = Instance.new("Frame")
+brokeDolls.BackgroundTransparency = 1
+brokeDolls.AnchorPoint = Vector2.new(0.5, 1)
+brokeDolls.Position = UDim2.new(0.5, 0, 1, -2)
+brokeDolls.Size = UDim2.new(1, 0, 0, 172)
+brokeDolls.ZIndex = 7
+brokeDolls.Parent = brokeScene
+local brokeList = list(brokeDolls, Enum.FillDirection.Horizontal, 6)
+brokeList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+brokeList.VerticalAlignment = Enum.VerticalAlignment.Bottom
+
+-- "파산" 도장(오른쪽 위, 빨간 이중 동그라미)
+local stamp = Instance.new("Frame")
+stamp.AnchorPoint = Vector2.new(0.5, 0.5)
+stamp.Position = UDim2.new(1, -78, 0, 70)
+stamp.Size = UDim2.fromOffset(116, 116)
+stamp.BackgroundColor3 = WHITE
+stamp.BackgroundTransparency = 0.25
+stamp.Rotation = 14
+stamp.ZIndex = 9
+stamp.Visible = false
+corner(stamp, 58)
+stamp.Parent = brokeScene
+local stampRing = Instance.new("UIStroke")
+stampRing.Color = SEIZED
+stampRing.Thickness = 6
+stampRing.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+stampRing.Parent = stamp
+local stampInner = rect(stamp, 58, 58, 94, 94, WHITE, 9, 47)
+stampInner.AnchorPoint = Vector2.new(0.5, 0.5)
+stampInner.BackgroundTransparency = 1
+local innerRing = Instance.new("UIStroke")
+innerRing.Color = SEIZED
+innerRing.Thickness = 2
+innerRing.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+innerRing.Parent = stampInner
+local stampText = text(stamp, "파산", 40, SEIZED, ROUND)
+stampText.Size = UDim2.fromScale(1, 1)
+stampText.ZIndex = 9
+local stampPop = Instance.new("UIScale")
+stampPop.Parent = stamp
+
+-- 쾅! 크게 기울어 떨어지다 찍히고, 찍힌 순간 살짝 통
+local function slamStamp()
+	stamp.Visible = true
+	stampPop.Scale = 2.8
+	stamp.Rotation = 40
+	stamp.BackgroundTransparency = 1
+	local fall = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, 0.5)
+	TweenService:Create(stampPop, fall, { Scale = 1 }):Play()
+	TweenService:Create(stamp, fall, { Rotation = 14, BackgroundTransparency = 0.25 }):Play()
+	task.delay(0.68, function()
+		stampPop.Scale = 1.12
+		TweenService:Create(stampPop, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	end)
+end
+
+type Drop = { part: Part, born: number, velocity: Vector3 }
+type Doll = { model: Model, view: ViewportFrame, phase: number, nextTear: number, nextRain: number, drops: { Drop } }
+local dolls: { Doll } = {}
+local brokeKey = ""
+
+local function animalIndexOf(userId: number): number
+	local someone = Players:GetPlayerByUserId(userId)
+	local index = someone and someone:GetAttribute("AnimalIndex")
+	return if typeof(index) == "number" and AnimalLooks.list[index] then index else 1
+end
+
+-- 사람이 바뀌었을 때만 다시 만든다
+local function buildBroke(people: { Person })
+	local ids = {}
+	for _, person in people do
+		table.insert(ids, `{person.userId}:{animalIndexOf(person.userId)}`)
+	end
+	local key = table.concat(ids, ",")
+	if key == brokeKey then
+		return
+	end
+	brokeKey = key
+	for _, child in brokeDolls:GetChildren() do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+	table.clear(dolls)
+	for i, person in people do
+		local card = Instance.new("Frame")
+		card.BackgroundTransparency = 1
+		card.Size = UDim2.fromOffset(136, 170)
+		card.LayoutOrder = i
+		card.ZIndex = 7
+		card.Parent = brokeDolls
+		local view = Instance.new("ViewportFrame")
+		view.BackgroundTransparency = 1
+		view.Size = UDim2.new(1, 0, 0, 146)
+		view.ZIndex = 7
+		view.Ambient = Color3.fromRGB(176, 178, 196) -- 우중충한 빛
+		view.LightColor = Color3.fromRGB(226, 232, 255)
+		view.LightDirection = Vector3.new(0.4, -1, 0.7)
+		view.Parent = card
+		local index = animalIndexOf(person.userId)
+		local model = AnimalLooks.preview(index)
+		AnimalLooks.shabby(model, AnimalLooks.get(index), CFrame.new(0, -3.3, 0))
+		model.Parent = view
+		-- 머리 위 작은 먹구름
+		for _, puff in { { -0.6, 3.55, 1.0 }, { 0, 3.75, 1.35 }, { 0.62, 3.55, 1.05 } } do
+			Build.ball(view, puff[3], CFrame.new(puff[1], puff[2], 0), Color3.fromRGB(168, 174, 192))
+		end
+		local camera = Instance.new("Camera")
+		camera.FieldOfView = 34
+		camera.CFrame = CFrame.lookAt(Vector3.new(0, 1.0, -12.5), Vector3.new(0, 0.4, 0))
+		camera.Parent = view
+		view.CurrentCamera = camera
+		local name = text(card, `엉엉… {person.name}`, 15, INK)
+		name.Position = UDim2.fromOffset(0, 146)
+		name.Size = UDim2.new(1, 0, 0, 22)
+		name.ZIndex = 7
+		name.TextTruncate = Enum.TextTruncate.AtEnd
+		table.insert(dolls, { model = model, view = view, phase = i * 1.7, nextTear = 0, nextRain = 0, drops = {} })
+	end
+end
+
+local function drop(doll: Doll, at: Vector3, velocity: Vector3, size: Vector3, now: number)
+	local part = Instance.new("Part")
+	part.Shape = Enum.PartType.Ball
+	part.Size = size
+	part.Color = Color3.fromRGB(140, 200, 245)
+	part.Material = Enum.Material.SmoothPlastic
+	part.Anchored = true
+	part.CFrame = CFrame.new(at)
+	part.Parent = doll.view
+	table.insert(doll.drops, { part = part, born = now, velocity = velocity })
+end
+
+-- 흐느끼며 들썩들썩 + 좌우로 고개 저음, 양쪽 눈에서 분수 눈물, 먹구름에서 보슬비
+RunService.RenderStepped:Connect(function(dt: number)
+	if not brokeScene.Visible or not center.Visible then
+		return
+	end
+	local now = os.clock()
+	for _, doll in dolls do
+		local beat = now * 9 + doll.phase
+		local pose = CFrame.new(0, math.abs(math.sin(beat)) * 0.14, 0)
+			* CFrame.Angles(math.rad(-6) + math.sin(beat) * 0.03, math.sin(now * 1.4 + doll.phase) * 0.3, math.sin(beat) * 0.04)
+		doll.model:PivotTo(pose)
+		if now >= doll.nextTear then
+			doll.nextTear = now + 0.16
+			for _, side in { -1, 1 } do
+				local eye = pose * Vector3.new(side * 0.62, 0.32, -1.15)
+				drop(doll, eye, pose:VectorToWorldSpace(Vector3.new(side * 1.7, 1.5, -0.5)), Vector3.new(0.17, 0.17, 0.17), now)
+			end
+		end
+		if now >= doll.nextRain then
+			doll.nextRain = now + 0.22
+			drop(doll, Vector3.new((math.random() - 0.5) * 1.3, 3.1, 0), Vector3.new(0, -4, 0), Vector3.new(0.07, 0.24, 0.07), now)
+		end
+		for i = #doll.drops, 1, -1 do
+			local d = doll.drops[i]
+			if now - d.born > 0.6 then
+				d.part:Destroy()
+				table.remove(doll.drops, i)
+			else
+				d.velocity += Vector3.new(0, -9 * dt, 0)
+				d.part.CFrame = CFrame.new(d.part.Position + d.velocity * dt)
+			end
+		end
+	end
+end)
+
 local startButton = button(center, "", UDim2.fromOffset(220, 54), CORAL)
 startButton.AnchorPoint = Vector2.new(1, 1)
 startButton.Position = UDim2.fromScale(1, 1)
@@ -1027,39 +1331,47 @@ local function layoutButtons(firstMorning: boolean)
 	end
 end
 
--- 3·2·1: 크림색 동그라미에 숫자마다 다른 색 테두리. 숫자가 바뀔 때마다 톡 튀어나오고, 끝나면 "오픈!"
-local COUNT_COLORS = { CORAL, GOLD, SAGE }
-local OPEN_COLOR = Color3.fromRGB(240, 128, 160)
+-- 3·2·1: 동그라미 없이 하얀 숫자 + 연분홍 테두리 + 옅은 그림자(숫자마다 색을 바꾸면 촌스러웠다).
+-- 숫자가 바뀔 때마다 톡 튀어나온다. 끝나면 "오픈!"
+local COUNT_EDGE = Color3.fromRGB(242, 160, 190)
 local countdown = Instance.new("Frame")
 countdown.ZIndex = 40 -- 날짜 넘어가는 커튼 위에
 countdown.AnchorPoint = Vector2.new(0.5, 0.5)
-countdown.Position = UDim2.fromScale(0.5, 0.56) -- 위쪽 새 규칙·새 메뉴 알림과 겹치지 않게
-countdown.Size = UDim2.fromOffset(170, 170)
-countdown.BackgroundColor3 = PAPER
-countdown.BorderSizePixel = 0
+countdown.Position = UDim2.fromScale(0.5, 0.62) -- 위쪽 새 규칙·새 메뉴 알림(크게 보인다)과 겹치지 않게
+countdown.Size = UDim2.fromOffset(300, 220)
+countdown.BackgroundTransparency = 1
 countdown.Visible = false
-corner(countdown, 85)
 countdown.Parent = gui
-local countRing = Instance.new("UIStroke")
-countRing.Thickness = 10
-countRing.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-countRing.Parent = countdown
 local countPop = Instance.new("UIScale")
 countPop.Parent = countdown
-local countNumber = text(countdown, "", 108, CORAL, ROUND)
-countNumber.Size = UDim2.fromScale(1, 1)
+local function countText(z: number): TextLabel
+	local label = text(countdown, "", 150, WHITE, ROUND)
+	label.Size = UDim2.fromScale(1, 1)
+	label.TextWrapped = false
+	label.ZIndex = z
+	return label
+end
+local countShadow = countText(41) -- 옅은 그림자, 조금 아래로
+countShadow.Position = UDim2.fromOffset(0, 6)
+countShadow.TextColor3 = Color3.fromRGB(120, 70, 90)
+countShadow.TextTransparency = 0.82
+local countNumber = countText(42)
+local countEdge = Instance.new("UIStroke")
+countEdge.Color = COUNT_EDGE
+countEdge.Thickness = 6
+countEdge.Parent = countNumber
 local countSeq = 0
 local shownCount = 0
 
-local function popCount(label: string, color: Color3, size: number)
+local function popCount(label: string, size: number)
 	countdown.Visible = true
-	countNumber.Text = label
-	countNumber.TextSize = size
-	countNumber.TextColor3 = color
-	countRing.Color = color
-	countPop.Scale = 1.7
-	countdown.Rotation = -14
-	local info = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	for _, t in { countShadow, countNumber } do
+		t.Text = label
+		t.TextSize = size
+	end
+	countPop.Scale = 1.8
+	countdown.Rotation = -12
+	local info = TweenInfo.new(0.38, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 	TweenService:Create(countPop, info, { Scale = 1 }):Play()
 	TweenService:Create(countdown, info, { Rotation = 0 }):Play()
 end
@@ -1070,7 +1382,7 @@ local function showCount(n: number)
 	end
 	shownCount = n
 	countSeq += 1
-	popCount(tostring(n), COUNT_COLORS[math.clamp(n, 1, #COUNT_COLORS)], 108)
+	popCount(tostring(n), 150)
 end
 
 local function hideCount()
@@ -1084,7 +1396,7 @@ local function showOpen()
 	countSeq += 1
 	local seq = countSeq
 	shownCount = 0
-	popCount("오픈!", OPEN_COLOR, 48)
+	popCount("오픈!", 96)
 	task.delay(0.7, function()
 		if seq ~= countSeq then
 			return
@@ -1267,12 +1579,10 @@ local function renderNight(r: Report)
 		result = `순수익이 내 지갑에 들어왔어요.`
 	end
 	summary.Text = result
-	-- 신기록은 따로 줄을 쓰지 않고 오른쪽 위 🏆 자리에 띄운다(콩닥콩닥)
-	local isNew = table.find(r.newRecords, player.UserId) ~= nil
-	if isNew then
+	-- 신기록은 따로 줄을 쓰지 않고 오른쪽 위 🏆 자리에 띄운다
+	if table.find(r.newRecords, player.UserId) then
 		recordLabel.Text = `✨🏆 신기록! DAY {r.survived} · 매출 {r.runSales}`
 	end
-	shineRecord(isNew)
 
 	local incomeTotal = 0
 	for _, item in r.income do
@@ -1302,7 +1612,13 @@ local function renderCenter()
 	local d = state.upcomingDay
 	local report = state.report
 	local night = phase == "night" and report ~= nil
-	center.Size = UDim2.fromOffset(PANEL_WIDTH, if not night then PANEL_HEIGHT elseif ledgerOpen then NIGHT_HEIGHT else NIGHT_SHORT_HEIGHT)
+	local broke = night and report ~= nil and report.bankrupt
+	local nightHeight = (if ledgerOpen then NIGHT_HEIGHT else NIGHT_SHORT_HEIGHT) + (if broke then BROKE_HEIGHT + 10 else 0)
+	center.Size = UDim2.fromOffset(PANEL_WIDTH, if night then nightHeight else PANEL_HEIGHT)
+	brokeScene.Visible = broke
+	if broke then
+		buildBroke(state.people)
+	end
 	-- 새 규칙·새 메뉴 카드는 아침에만. 밤에는 장부 자리가 좁아서 빼고, 영업을 시작할 때 화면 위에 잠깐 보여 준다(showAnnounce).
 	local hasRules = #state.rules > 0 and not night
 	-- 위에서부터: 숫자 카드 → (아침) 새 규칙 카드 → 새 메뉴 카드 → 글·장부
@@ -1354,7 +1670,6 @@ local function renderCenter()
 	summary.Text = if d == 1
 		then `말풍선 주문대로 디저트를 만들어 손님 앞에 내 주세요.\n{warn}\n처음이면 아래 {sky("<b>튜토리얼</b>")}부터!`
 		else `오늘도 달콤하게!\n{warn}`
-	shineRecord(false)
 	startButton.Text = `DAY {d} 영업 시작`
 	startButton.BackgroundColor3 = CORAL
 end
@@ -1376,16 +1691,17 @@ local function applyScale()
 	local size = camera.ViewportSize
 	local s = math.clamp(math.min(size.X / 1280, size.Y / 760), 0.6, 1.3)
 	for _, u in scales do
-		u.Scale = s
+		UiDeco.fit(u, s)
 	end
-	scale.Scale = math.min(1.5, (size.X - 140) / PANEL_WIDTH, (size.Y - 90) / center.Size.Y.Offset)
+	-- 아침·밤 창 높이가 달라도 같은 크기로 보이게 기준 높이는 아침 창 이상으로(밤 창이 작아서 더 크게 보였다)
+	UiDeco.fit(scale, math.min(1.5, (size.X - 140) / PANEL_WIDTH, (size.Y - 90) / math.max(center.Size.Y.Offset, PANEL_HEIGHT)))
 	local top = math.floor(60 * s)
 	toast.Position = UDim2.new(0.5, 0, 0, top)
 	side.Position = UDim2.new(1, -10, 0, top)
 	coinGain.Position = UDim2.new(1, -math.floor(254 * s), 0, math.floor(14 * s))
 	spendHolder.Position = UDim2.new(1, -math.floor(254 * s), 0, math.floor(36 * s))
-	recipe.Position = UDim2.new(1, -math.floor(10 + 56 * s), 0, top)
-	chatMenu.Position = UDim2.new(1, -math.floor(10 + 56 * s), 0, top + math.floor(54 * s))
+	recipe.Position = UDim2.new(1, -math.floor(10 + 64 * s), 0, top)
+	chatMenu.Position = UDim2.new(1, -math.floor(10 + 64 * s), 0, top + math.floor((DOCK_PAD + 48) * s))
 end
 ledgerToggle.Activated:Connect(function()
 	ledgerOpen = not ledgerOpen
@@ -1401,6 +1717,7 @@ end
 local ANNOUNCE_SECONDS = 7 -- 카운트다운(3초)이 시작될 때부터 이만큼 보인다
 local FADE_SECONDS = 1.2
 local ANNOUNCE_Y = 100
+local ANNOUNCE_ZOOM = 1.35 -- 위 바보다 크게(플레이 테스트: 영업 시작 알림이 작았다)
 local announce = Instance.new("Frame")
 announce.BackgroundTransparency = 1
 announce.AnchorPoint = Vector2.new(0.5, 0)
@@ -1562,10 +1879,11 @@ local function popTiles()
 		TweenService:Create(tile.pop, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 0, false, 0.08 + (i - 1) * 0.09), { Scale = 1 }):Play()
 	end
 	local r = state.report
-	if r and (r.short > 0 or r.bankrupt) then
+	if r and r.bankrupt then
+		slamStamp()
+	elseif r and r.short > 0 then
 		task.delay(0.6, function()
 			shake(tiles[4].box)
-			shake(heading)
 		end)
 	end
 end
@@ -1591,7 +1909,7 @@ local function popPanel()
 		return
 	end
 	panelPopPending = false
-	UiDeco.popIn(scale, scale.Scale)
+	UiDeco.popIn(scale)
 	if state.phase == "night" and state.report then
 		popTiles()
 	end
@@ -1704,7 +2022,8 @@ local function playCurtain(day: number)
 	curtain.Position = UDim2.fromScale(-1, 0)
 	curtain.Visible = true
 	TweenService:Create(curtain, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.fromScale(0, 0) }):Play()
-	task.delay(0.8, function()
+	-- 들어오기 0.35 + 머무르기 + 나가기 0.35가 Config.CurtainSeconds 안에 끝나게(끝에 0.1초 여유)
+	task.delay(math.max(0.5, Config.CurtainSeconds - 0.45), function()
 		if seq ~= curtainSeq then
 			return
 		end
@@ -1721,8 +2040,19 @@ local function applyState(incoming: State)
 	state = incoming
 	local phase = state.phase
 	local previous = lastPhase
+	local newDay = lastDay ~= 0 and state.day ~= lastDay and (phase == "countdown" or phase == "morning")
 	if phase == "countdown" and previous ~= "countdown" then
-		showAnnounce(state.rules, freshMenus())
+		-- 날짜 커튼이 지나간 뒤에 새 규칙·새 메뉴 알림
+		local rules, fresh = state.rules, freshMenus()
+		if newDay then
+			task.delay(Config.CurtainSeconds, function()
+				if state.phase == "countdown" or state.phase == "open" then
+					showAnnounce(rules, fresh)
+				end
+			end)
+		else
+			showAnnounce(rules, fresh)
+		end
 	end
 	lastPhase = phase
 	local inMenu = phase == "morning" or phase == "night"
@@ -1757,10 +2087,13 @@ local function applyState(incoming: State)
 	renderRecipe()
 	applyScale()
 	popPanel()
-	announceScale.Scale = scales[1].Scale -- 위 바와 같은 크기로
+	-- 위 바 크기의 1.35배, 화면 폭(700 + 여백)을 넘지 않게
+	local view = workspace.CurrentCamera
+	local fitWidth = if view then (view.ViewportSize.X - 40) / 700 else 1
+	announceScale.Scale = math.min(scales[1].Scale * ANNOUNCE_ZOOM, fitWidth)
 	updateAdmin()
 	-- 날짜가 바뀌면(다음 날 시작·파산 뒤 처음부터) 분홍 커튼이 쓱 지나간다
-	if lastDay ~= 0 and state.day ~= lastDay and (phase == "countdown" or phase == "morning") then
+	if newDay then
 		playCurtain(state.day)
 	end
 	lastDay = state.day
@@ -1777,7 +2110,11 @@ RunService.RenderStepped:Connect(function()
 		timeLabel.Text = clock(state.endsAt - t)
 	elseif state.phase == "countdown" then
 		timeLabel.Text = clock(state.daySeconds)
-		showCount(math.max(1, math.ceil(state.endsAt - t)))
+		-- 날짜 커튼이 지나간 뒤 마지막 3초만 3·2·1
+		local left = state.endsAt - t
+		if left <= Config.CountdownSeconds then
+			showCount(math.max(1, math.ceil(left)))
+		end
 	elseif state.phase == "night" and state.report then
 		updateNightButton()
 	end

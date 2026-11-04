@@ -37,6 +37,7 @@ local Config = {}
 
 Config.DaySeconds = 180 -- 하루 영업 최대 길이. DAY 1은 120초에서 하루 +15초씩(Config.dayParams)
 Config.CountdownSeconds = 3
+Config.CurtainSeconds = 1.3 -- 다음 날로 넘어갈 때 "DAY N · 오늘도 달콤하게!" 커튼이 지나가는 시간. 3·2·1은 커튼이 지나간 뒤에 시작한다
 Config.NightSeconds = 20 -- 밤 정산 화면을 보여 주는 시간. 모두 준비를 누르거나 이 시간이 지나면 다음 날 영업이 시작된다(플레이 테스트: 30초는 길었다)
 Config.NightIntroSeconds = 3 -- 영업이 끝나면 정산 창 전에 가게 화면 가운데서 "오늘 번 돈"이 올라간다. 이 시간은 NightSeconds에 더한다
 Config.WalkSpeed = 13.5 -- 플레이 테스트에서 20은 너무 빨랐다(1/3 줄임)

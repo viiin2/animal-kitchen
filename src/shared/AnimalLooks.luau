@@ -243,6 +243,65 @@ function AnimalLooks.paint(model: Model, look: Look, outfit: Outfit?, origin: CF
 	return head
 end
 
+-- 파산했을 때(파산 결과창 인형): 꼬질꼬질 먼지 빛, 덧대 기운 옷(하얀 바늘땀), 반창고, 얼룩, 눈물 자국, 처진 눈썹, 엉엉 우는 입.
+-- paint로 그린 모델에 덧붙인다(look·origin은 paint에 준 것과 같게). 요리사 차림(앞치마)을 기준으로 자리를 잡았다.
+local DUST = rgb(150, 128, 110)
+local SMUDGE = rgb(118, 92, 76)
+local TEAR = rgb(150, 205, 245)
+local BANDAGE = rgb(250, 222, 190)
+
+function AnimalLooks.shabby(model: Model, look: Look, origin: CFrame?)
+	local o = origin or CFrame.identity
+	local function at(x: number, y: number, z: number): CFrame
+		return o * CFrame.new(x, y, z)
+	end
+	local function tilt(x: number, y: number, z: number, rz: number): CFrame
+		return o * CFrame.new(x, y, z) * CFrame.Angles(0, 0, math.rad(rz))
+	end
+	-- 꼬질꼬질: 모든 색을 먼지 빛으로 조금 탁하게
+	for _, part in model:GetDescendants() do
+		if part:IsA("BasePart") and part.Transparency < 1 then
+			part.Color = part.Color:Lerp(DUST, 0.22)
+		end
+	end
+	-- 덧댄 천 + 네 변에 하얀 바늘땀
+	local function patch(cframe: CFrame, w: number, h: number, color: Color3)
+		Build.part(model, BLOCK, Vector3.new(w, h, 0.05), cframe, color, SOFT)
+		for _, sign in { -1, 1 } do
+			for _, k in { -1, 1 } do
+				Build.part(model, BLOCK, Vector3.new(0.03, 0.11, 0.03), cframe * CFrame.new(k * w / 4, sign * h / 2, -0.035), WHITE)
+				Build.part(model, BLOCK, Vector3.new(0.11, 0.03, 0.03), cframe * CFrame.new(sign * w / 2, k * h / 4, -0.035), WHITE)
+			end
+		end
+	end
+	patch(tilt(-0.32, 1.72, -0.79, 12), 0.52, 0.46, rgb(255, 214, 120)) -- 앞치마
+	patch(tilt(-1.08, 2.0, -0.31, -18), 0.3, 0.32, rgb(150, 200, 240)) -- 소매
+	patch(tilt(0.42, 0.62, -0.32, -8), 0.3, 0.28, rgb(240, 150, 160)) -- 무릎
+	-- 반창고(이마 옆)
+	local band = tilt(0.55, 4.3, -0.9, -28)
+	Build.part(model, BLOCK, Vector3.new(0.62, 0.2, 0.06), band, BANDAGE, SOFT)
+	Build.part(model, BLOCK, Vector3.new(0.18, 0.14, 0.03), band * CFrame.new(0, 0, -0.035), Build.shade(BANDAGE, 0.12), SOFT)
+	-- 얼룩(반투명 흙 자국)
+	for _, spot in {
+		{ cf = at(-0.95, 3.05, -0.72) * CFrame.Angles(0, math.rad(35), 0), size = Vector3.new(0.42, 0.26, 0.08) },
+		{ cf = at(0.38, 1.28, -0.77), size = Vector3.new(0.32, 0.2, 0.06) },
+		{ cf = at(-0.45, 0.86, -0.31), size = Vector3.new(0.22, 0.16, 0.05) },
+	} do
+		local smudge = Build.blob(model, spot.size, spot.cf, SMUDGE)
+		smudge.Transparency = 0.35
+	end
+	-- 눈물 자국 · 처진 눈썹(안쪽 끝이 올라감)
+	for _, side in { -1, 1 } do
+		local stream = Build.blob(model, Vector3.new(0.15, 0.5, 0.06), at(side * 0.62, 3.42, -1.08), TEAR)
+		stream.Transparency = 0.15
+		Build.part(model, BLOCK, Vector3.new(0.42, 0.09, 0.08), tilt(side * 0.62, 4.28, -0.9, -side * 20), INK)
+	end
+	-- 엉엉 벌린 입 + 혀
+	local mouthZ = if look.ear == "pig" then -1.0 else -1.2
+	Build.blob(model, Vector3.new(0.36, 0.26, 0.08), at(0, 3.02, mouthZ), INK)
+	Build.blob(model, Vector3.new(0.2, 0.1, 0.04), at(0, 2.96, mouthZ - 0.03), rgb(240, 130, 150))
+end
+
 -- 고르기 창 미리보기용 모델(Root 가운데가 몸 가운데). 플레이어 모습(요리사 차림)으로 그린다.
 function AnimalLooks.preview(index: number): Model
 	local model = Build.model("AnimalPreview", Vector3.new(3, 6.6, 2.6))
