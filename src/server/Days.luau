@@ -3,14 +3,17 @@
 -- 목표 매출은 없다. 낮에 판 돈은 가게 금고에 모이고, 영업 중 쓴 운영비(Config.Costs)는 세어 두었다가
 -- 밤 정산에서 월세·빚 상환금(Config.Debt)과 함께 금고에서 낸다. 남은 순수익은 인원수로 똑같이 나눠 각자 지갑에 넣는다.
 -- 적자면 각자 지갑에서 1/n씩 메우고, 그래도 모자라면 연체(모자란 돈 + 연체료가 빚으로)다.
--- Config.Debt.strikes번 연체하면 파산해서 DAY 1 아침부터 다시 한다(지갑·빚·상점 단계도 처음으로).
+-- Config.Debt.strikes번 연체하면 파산: 최종 결과를 보여 준 뒤 로비로 돌아간다(Config.Places).
+-- 로비가 없으면(장소 id 0, Studio) 이 서버에서 DAY 1 아침부터 다시 한다(지갑·빚·상점 단계도 처음으로).
 -- 밤 정산 화면은 Config.NightSeconds 동안 보이고, 모두 준비를 누르거나 시간이 지나면 다음 날 영업이 시작된다.
 -- 아침·밤에는 튜토리얼(연습 손님 두 명, 코인 없음)을 할 수 있고, 끝나면 하던 화면으로 돌아간다.
 -- 개인 지갑은 상점 업그레이드(산 사람 돈만 빠지고 효과는 모두에게)와 빚 더 갚기에 쓴다. 동물은 게임패스로 연다(Avatars).
 -- 날마다 새 메뉴가 열리고(Config.Menus의 day) 손님이 더 자주, 덜 기다리며 온다(Config.dayParams).
--- 진행(날·지갑·상점 단계)은 이 서버에서만 이어진다. 사람마다 최고 기록(며칠까지 버텼는지)만 저장한다(Records).
+-- 진행(날·지갑·상점 단계)은 이 서버에서만 이어진다. 사람마다 최고 기록(며칠까지 버텼는지와 그 판의 총 매출)만 저장한다(Records).
+-- 파산한 밤에는 최종 결과(버틴 날·총 매출·받은 손님)를 보여 준다.
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.Shared.Config)
 local Remotes = require(script.Parent.Remotes)
@@ -45,6 +48,8 @@ type Report = {
 	bankrupt: boolean,
 	survived: number, -- 이번 가게가 며칠까지 버텼는지(파산한 밤이면 그 전날까지)
 	newRecords: { number }, -- 이번 밤에 최고 기록을 새로 세운 사람(UserId)
+	runSales: number, -- 이번 가게를 연 뒤 오늘까지 총 매출
+	runServed: number, -- 이번 가게를 연 뒤 오늘까지 받은 손님
 }
 
 local TICK_SECONDS = 0.25
@@ -62,7 +67,8 @@ local daySeconds = Config.DaySeconds -- 오늘 영업 시간
 local till = 0 -- 가게 금고: 오늘 매출(+ 어제 나누고 남은 잔돈)
 local carried = 0 -- 영업 시작 때 금고에 있던 잔돈
 local wallets: { [number]: number } = {} -- UserId별 개인 지갑(나갔다 다시 와도 이 서버에서는 남는다)
-local bests: { [number]: number } = {} -- UserId별 최고 기록: 며칠까지 버텼는지(Records에 저장)
+local bests: { [number]: Records.Best } = {} -- UserId별 최고 기록: 며칠까지 버텼는지와 그 판의 총 매출(Records에 저장)
+local run = { sales = 0, served = 0 } -- 이번 가게(파산하기 전까지) 누적
 local today: Today = { sales = 0, tips = 0, served = 0, missed = 0 }
 local used: { [string]: number } = {} -- 오늘 영업 중 돈 드는 일을 한 횟수(Stations.onSpend 키별)
 local levels: { [string]: number } = {}
@@ -71,6 +77,13 @@ local strikes = 0 -- 연체 횟수
 local report: Report? = nil -- 지난밤 정산
 local ready: { [Player]: boolean } = {} -- 밤: 다음 날 준비를 누른 사람
 local dirty = false -- 운영비가 바뀌어 화면에 보낼 것이 있다(tick에서 모아서 보낸다)
+local leaving = false -- 파산한 밤: 로비로 순간이동하는 중
+local LEAVE_WAIT = 15 -- 이만큼 지나도 아직 남아 있으면(순간이동 실패) 이 서버에서 DAY 1부터
+
+-- 파산하면 로비로 돌아갈 수 있는지(로비 장소 id가 있고 Studio가 아닐 때)
+local function lobbyAvailable(): boolean
+	return Config.Places.lobby ~= 0 and not RunService:IsStudio()
+end
 
 -- 그날 개인 기록과 마감 MVP 카드(부문마다 가장 잘한 사람, 기록이 있는 부문만)
 type MvpCard = { icon: string, title: string, name: string, detail: string, animal: number }
@@ -306,7 +319,14 @@ local function snapshot()
 	end
 	local people = {}
 	for _, player in Players:GetPlayers() do
-		table.insert(people, { userId = player.UserId, name = player.DisplayName, wallet = walletOf(player), best = bests[player.UserId] or 0 })
+		local best = bests[player.UserId]
+		table.insert(people, {
+			userId = player.UserId,
+			name = player.DisplayName,
+			wallet = walletOf(player),
+			best = if best then best.day else 0,
+			bestSales = if best then best.sales else 0,
+		})
 	end
 	local readyIds = {}
 	for player in ready do
@@ -339,6 +359,7 @@ local function snapshot()
 		},
 		report = if phase == "night" then report else nil,
 		ready = readyIds,
+		toLobby = lobbyAvailable(), -- 파산한 밤에 로비로 돌아가는지(아니면 이 서버에서 DAY 1부터)
 	}
 end
 
@@ -486,20 +507,27 @@ local function settle(): Report
 		bankrupt = strikes >= Config.Debt.strikes,
 		survived = day,
 		newRecords = {},
+		runSales = run.sales + today.sales,
+		runServed = run.served + today.served,
 	}
 end
 
--- 무사히 넘긴 밤: 그날까지 버틴 것을 사람마다 최고 기록과 비교해 저장한다
+-- 밤마다: 버틴 날(파산한 밤이면 그 전날까지)과 총 매출을 사람마다 최고 기록과 비교해 저장한다.
+-- 파산한 밤에도 최종 결과(마지막 날 매출까지)로 저장해서 로비에 보이는 숫자가 최종 결과와 같다. 신기록 표시는 무사히 넘긴 밤에만.
 local function updateRecords(result: Report)
+	run.sales, run.served = result.runSales, result.runServed
 	if result.bankrupt then
 		result.survived = day - 1
-		return
 	end
+	local candidate: Records.Best = { day = result.survived, sales = run.sales }
 	for _, player in Players:GetPlayers() do
-		if day > (bests[player.UserId] or 0) then
-			bests[player.UserId] = day
-			table.insert(result.newRecords, player.UserId)
-			task.spawn(Records.save, player.UserId, day)
+		local best = bests[player.UserId] or { day = 0, sales = 0 }
+		if Records.better(candidate, best) then
+			bests[player.UserId] = { day = candidate.day, sales = candidate.sales }
+			task.spawn(Records.save, player.UserId, candidate)
+			if not result.bankrupt then
+				table.insert(result.newRecords, player.UserId)
+			end
 		end
 	end
 end
@@ -508,7 +536,10 @@ end
 local function loadRecord(player: Player)
 	task.spawn(function()
 		local saved = Records.load(player.UserId)
-		bests[player.UserId] = math.max(bests[player.UserId] or 0, saved)
+		local known = bests[player.UserId]
+		if not known or Records.better(saved, known) then
+			bests[player.UserId] = saved
+		end
 		broadcast()
 	end)
 end
@@ -517,6 +548,7 @@ end
 local function goBankrupt()
 	nextDay = 1
 	till = 0
+	run = { sales = 0, served = 0 }
 	table.clear(wallets)
 	table.clear(levels)
 	debt = Config.Debt.start
@@ -560,7 +592,7 @@ local function finish()
 		goBankrupt()
 	end
 	phase = "night"
-	endsAt = now() + Config.NightSeconds
+	endsAt = now() + Config.NightIntroSeconds + Config.NightSeconds -- 정산 창은 "오늘 번 돈" 뒤에 뜬다
 	table.clear(ready)
 	Stations.reset()
 	Tables.reset()
@@ -573,10 +605,26 @@ local function finish()
 	broadcast()
 end
 
--- 밤이 끝나면(시간이 다 되거나 모두 준비) 다음 날 영업. 파산한 밤이면 DAY 1 아침으로.
+-- 밤이 끝나면(시간이 다 되거나 모두 준비) 다음 날 영업. 파산한 밤이면 로비로(못 가면 DAY 1 아침으로).
 local function endNight()
 	local last = report
 	if last and last.bankrupt then
+		if lobbyAvailable() and not leaving then
+			leaving = true
+			endsAt = now() + LEAVE_WAIT
+			Remotes.toast(nil, "로비로 돌아가요…")
+			broadcast()
+			task.spawn(function()
+				local ok, err = pcall(function()
+					TeleportService:TeleportAsync(Config.Places.lobby, Players:GetPlayers())
+				end)
+				if not ok then
+					warn(`로비로 순간이동 실패: {err}`)
+				end
+			end)
+			return
+		end
+		leaving = false
 		day = nextDay
 		phase = "morning"
 		passed = false
@@ -694,6 +742,17 @@ function Days.adminPass()
 	Tables.reset()
 	applyEffects()
 	Remotes.toast(nil, `관리자: DAY {day}로 넘어갔어요`)
+	broadcast()
+end
+
+-- 관리자 코인(테스트용): 누른 사람 지갑에 amount만큼 더한다(음수면 뺀다, 0 아래로는 안 내려간다)
+function Days.adminCoins(player: Player, amount: number)
+	local change = math.max(amount, -walletOf(player))
+	addWallet(player, change)
+	Remotes.toast(player, `관리자: 코인 {if change >= 0 then "+" else ""}{change} (지갑 {walletOf(player)})`)
+	if change > 0 then
+		Remotes.sfx(player, "coin")
+	end
 	broadcast()
 end
 

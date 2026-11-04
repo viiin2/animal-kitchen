@@ -498,10 +498,10 @@ end
 
 -- 손님 자리에 낸 디저트를 확인한다. (성공했는지, 알림 문장, 가격, 팁). tipBonus는 낸 사람의 동물 능력(0.25 = 팁 +25%).
 -- 단체 손님은 남은 주문 중 맞는 하나를 채우고, 마지막 하나를 낼 때 단체 보너스를 팁에 더한다.
-function Customers.serveAt(seatIndex: number, served: Served, tipBonus: number?): (boolean, string, number, number)
+function Customers.serveAt(seatIndex: number, served: Served, tipBonus: number?): (boolean, string, number, number, boolean)
 	local p = params
 	if not active or not p then
-		return false, "영업 중에만 낼 수 있어요", 0, 0
+		return false, "영업 중에만 낼 수 있어요", 0, 0, false
 	end
 	local customer: Customer? = nil
 	for _, c in list do
@@ -511,7 +511,7 @@ function Customers.serveAt(seatIndex: number, served: Served, tipBonus: number?)
 		end
 	end
 	if not customer then
-		return false, "이 자리에는 주문한 손님이 없어요", 0, 0
+		return false, "이 자리에는 주문한 손님이 없어요", 0, 0, false
 	end
 	local match: Order? = nil
 	local reason: string? = nil
@@ -530,7 +530,7 @@ function Customers.serveAt(seatIndex: number, served: Served, tipBonus: number?)
 		end
 	end
 	if not match then
-		return false, reason or `{table.concat(pending, ", ")}을(를) 주문했어요`, 0, 0
+		return false, reason or `{table.concat(pending, ", ")}을(를) 주문했어요`, 0, 0, false
 	end
 
 	match.done = true
@@ -547,7 +547,7 @@ function Customers.serveAt(seatIndex: number, served: Served, tipBonus: number?)
 	end
 	publish(customer)
 	if done < total then
-		return true, `{orderName(match)} 완성! 단체 손님 {done}/{total} +{price + tip} 코인`, price, tip
+		return true, `{orderName(match)} 완성! 단체 손님 {done}/{total} +{price + tip} 코인`, price, tip, false
 	end
 
 	-- 덜렁이: 처음 받은 걸 떨어뜨리고 같은 걸 한 번 더 주문한다(이번 건 돈을 안 낸다)
@@ -563,7 +563,7 @@ function Customers.serveAt(seatIndex: number, served: Served, tipBonus: number?)
 		publish(customer)
 		splat(customer, served.kind, served.spec)
 		Remotes.sfx(nil, "angry")
-		return true, "앗, 덜렁이 손님이 떨어뜨렸어요! 한 번 더 만들어 주면 팁을 더 줘요", 0, 0
+		return true, "앗, 덜렁이 손님이 떨어뜨렸어요! 한 번 더 만들어 주면 팁을 더 줘요", 0, 0, false
 	end
 
 	customer.phase = "eating"
@@ -578,13 +578,13 @@ function Customers.serveAt(seatIndex: number, served: Served, tipBonus: number?)
 				Customers.onScriptDone()
 			end)
 		end
-		return true, `{orderName(match)} 완성! 잘했어요`, 0, 0
+		return true, `{orderName(match)} 완성! 잘했어요`, 0, 0, false
 	end
 	if customer.group then
 		local bonus = math.floor(sum * Config.Groups.bonus + 0.5)
-		return true, `단체 주문 완성! +{price + tip + bonus} 코인 (단체 보너스 {bonus})`, price, tip + bonus
+		return true, `단체 주문 완성! +{price + tip + bonus} 코인 (단체 보너스 {bonus})`, price, tip + bonus, true
 	end
-	return true, `{orderName(match)} 완성! +{price + tip} 코인 (팁 {tip})`, price, tip
+	return true, `{orderName(match)} 완성! +{price + tip} 코인 (팁 {tip})`, price, tip, false
 end
 
 return Customers

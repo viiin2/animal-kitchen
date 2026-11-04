@@ -25,9 +25,9 @@ local Remotes = {
 	Tutorial = event(Config.Remotes.Tutorial), -- 클라이언트 → 서버: 튜토리얼 시작(true)·그만하기(false)
 	Unstuck = event(Config.Remotes.Unstuck), -- 클라이언트 → 서버: 끼었을 때 처음 자리로
 	PayDebt = event(Config.Remotes.PayDebt), -- 클라이언트 → 서버: 빚 갚기(코인 수, "all"이면 전부)
-	Earned = event(Config.Remotes.Earned), -- 서버 → 모두: 손님에게 낸 자리 위치, 번 코인, 팀 콤보(머리 위 +코인)
+	Earned = event(Config.Remotes.Earned), -- 서버 → 모두: 손님에게 낸 자리 위치, 번 코인, 팀 콤보, 낸 사람 UserId, 큰 보너스(콤보·단체)인지
 	Sfx = event(Config.Remotes.Sfx), -- 서버 → 한 명 또는 모두: 효과음 이름(Config.Sounds)
-	Admin = event(Config.Remotes.Admin), -- 클라이언트 → 서버: 관리자 명령("pass" = DAY 패스, "stop" = 영업 그만하기). 서버가 관리자인지 확인한다
+	Admin = event(Config.Remotes.Admin), -- 클라이언트 → 서버: 관리자 명령("pass" = DAY 패스, "stop" = 영업 그만하기, "coins", n = 내 지갑에 코인 n). 서버가 관리자인지 확인한다
 	Chat = event(Config.Remotes.Chat), -- 클라이언트 → 서버: 빠른 말풍선 번호
 }
 

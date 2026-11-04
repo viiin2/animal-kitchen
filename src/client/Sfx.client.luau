@@ -90,7 +90,7 @@ end
 
 -- 하루: 카운트다운 째깍, 영업 시작, 정산 성공·실패
 local lastPhase: string? = nil
-stateEvent.OnClientEvent:Connect(function(state: { phase: string, endsAt: number, passed: boolean })
+stateEvent.OnClientEvent:Connect(function(state: { phase: string, endsAt: number, passed: boolean, report: { earned: number }? })
 	local phase = state.phase
 	if phase ~= lastPhase then
 		if phase == "countdown" then
@@ -101,7 +101,13 @@ stateEvent.OnClientEvent:Connect(function(state: { phase: string, endsAt: number
 		elseif phase == "open" then
 			play("start")
 		elseif phase == "night" and lastPhase == "open" then
-			play(if state.passed then "win" else "lose")
+			-- 가운데서 "오늘 번 돈"이 올라가는 동안 짤랑짤랑, 정산 창이 뜰 때 성공·실패
+			if state.report and state.report.earned > 0 then
+				for i = 0, 5 do
+					task.delay(0.3 + i * 0.25, play, "coin")
+				end
+			end
+			task.delay(Config.NightIntroSeconds, play, if state.passed then "win" else "lose")
 		end
 	end
 	lastPhase = phase

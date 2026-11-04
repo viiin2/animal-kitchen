@@ -1,13 +1,15 @@
 --!strict
 -- 화면(HUD). 영업 중에는 화면을 가리지 않게 맨 위 가운데 작은 바와 오른쪽 작은 버튼만 둔다.
---   맨 위 바: DAY · 남은 시간 · 가게 금고/지출/밤에 낼 돈(손님 말풍선과 겹치지 않게 화면 맨 위에 붙인다)
---   오른쪽 위: 내 지갑(밤 정산에서 순수익을 나눠 받는다)과 남은 빚
---   오른쪽 버튼: 레시피북(R, 켜고 끄기) · 말풍선(1~4) · 카메라(C) · 끼었어요(처음 자리로)
---   아침·밤: 가운데 창(아침: 오늘 낼 돈·메뉴, 밤: 정산 장부·나눠 가진 돈·빚). 아래 버튼으로 상점 창(Shop)·동물 고르기 창(AnimalPicker)·튜토리얼을 연다.
+--   맨 위 바: DAY · 남은 시간(손님 말풍선과 겹치지 않게 화면 맨 위에 붙인다)
+--   오른쪽 위: 내 코인과 남은 빚. 영업 중에는 오늘 가게 돈의 내 몫까지 실시간으로 오르내린다(liveCoins)
+--   오른쪽 버튼: 레시피북(R, 켜고 끄기) · 말풍선(1~4) · 카메라(C) · 끼었어요(처음 자리로) · 관리자 버튼
+--   아침·밤: 가운데 창(아침: 오늘 낼 돈·메뉴, 밤: 숫자 카드 + 결과 한 줄, 장부는 접어 둠). 아래 버튼으로 상점 창(Shop)·동물 고르기 창(AnimalPicker)·튜토리얼을 연다.
+--   영업이 끝나면 먼저 가운데서 "오늘 번 돈"이 올라가고(Config.NightIntroSeconds) 정산 창이 뜬다.
 --   밤에는 Config.NightSeconds 뒤 저절로 다음 날이 시작되고, 모두 준비를 누르면 바로 시작된다.
 --   "가게 둘러보기"로 접을 수 있다.
 -- 주문은 손님 머리 위 말풍선(Bubbles)이 보여 준다. 판정은 모두 서버가 한다.
 local Players = game:GetService("Players")
+local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -27,11 +29,12 @@ local chatEvent = remotes:WaitForChild(Config.Remotes.Chat) :: RemoteEvent
 local tutorialEvent = remotes:WaitForChild(Config.Remotes.Tutorial) :: RemoteEvent
 local unstuckEvent = remotes:WaitForChild(Config.Remotes.Unstuck) :: RemoteEvent
 local adminEvent = remotes:WaitForChild(Config.Remotes.Admin) :: RemoteEvent
+local earnedEvent = remotes:WaitForChild(Config.Remotes.Earned) :: RemoteEvent
 
 type MenuView = { dish: string, name: string, steps: string, price: number, isNew: boolean }
 type Today = { sales: number, tips: number, served: number, missed: number }
 type AnimalView = { name: string, price: number, owned: boolean }
-type Person = { userId: number, name: string, wallet: number, best: number }
+type Person = { userId: number, name: string, wallet: number, best: number, bestSales: number }
 -- 오늘 밤 낼 돈: 쓴 운영비(spent, 기본 전기세 빼고) + 월세 + 빚 상환금 + 기본 전기세
 type Money = { spent: number, rent: number, due: number, basePower: number, strikes: number, maxStrikes: number }
 type Line = { name: string, amount: number, detail: string }
@@ -53,6 +56,8 @@ type Report = {
 	bankrupt: boolean,
 	survived: number,
 	newRecords: { number },
+	runSales: number,
+	runServed: number,
 }
 type State = {
 	phase: string,
@@ -72,6 +77,7 @@ type State = {
 	report: Report?,
 	ready: { number },
 	customers: number,
+	toLobby: boolean,
 }
 
 local BODY = Enum.Font.GothamBold
@@ -83,6 +89,7 @@ local LINE = Color3.fromRGB(236, 220, 202)
 local CORAL = Color3.fromRGB(236, 132, 100)
 local SAGE = Color3.fromRGB(134, 178, 126)
 local GOLD = Color3.fromRGB(232, 176, 76)
+local GOLD_TEXT = Color3.fromRGB(196, 140, 48)
 local WHITE = Color3.new(1, 1, 1)
 
 local player = Players.LocalPlayer
@@ -104,6 +111,7 @@ local state: State = {
 	report = nil,
 	ready = {},
 	customers = 0,
+	toLobby = false,
 }
 
 local function me(): Person?
@@ -120,10 +128,14 @@ local function myWallet(): number
 	return if mine then mine.wallet else 0
 end
 
--- 오늘 밤 낼 돈(지금까지 쓴 운영비까지)
-local function nightBill(): number
-	local money = state.money
-	return money.spent + money.rent + money.due + money.basePower
+-- 오른쪽 위 코인 숫자. 영업 중에는 지갑에 오늘 가게 돈(번 돈 - 쓴 재료비·전기세)의 내 몫(1/n)을 더해서
+-- 손님에게 내면 바로 오르고 재료를 쓰면 내려간다. 월세·빚 상환금은 밤 정산에서 빠진다.
+local function liveCoins(): number
+	local wallet = myWallet()
+	if state.phase ~= "open" then
+		return wallet
+	end
+	return wallet + math.floor((state.till - state.money.spent) / math.max(1, #state.people))
 end
 
 -- 플레이어 목록·가방은 쓰지 않는다
@@ -209,9 +221,9 @@ local function button(parent: Instance, value: string, size: UDim2, color: Color
 	return b
 end
 
--- ── 맨 위 바: DAY · 남은 시간 · 금고 · 지출 · 밤에 낼 돈(막대는 금고가 낼 돈을 얼마나 채웠는지) ──
+-- ── 맨 위 바: DAY · 남은 시간(금고·지출 글과 막대는 글이 많아 뺐다. 돈은 오른쪽 위 코인이 실시간으로 움직인다) ──
 
-local bar = frame(gui, UDim2.fromOffset(570, 52))
+local bar = frame(gui, UDim2.fromOffset(176, 52))
 bar.AnchorPoint = Vector2.new(0.5, 0)
 bar.Position = UDim2.new(0.5, 0, 0, 4)
 bar.Visible = false
@@ -220,23 +232,6 @@ dayChip.Size = UDim2.fromOffset(92, 52)
 local timeLabel = text(bar, "3:00", 23, INK, ROUND)
 timeLabel.Size = UDim2.fromOffset(76, 52)
 timeLabel.Position = UDim2.fromOffset(88, 0)
-local salesLabel = text(bar, "", 17, INK)
-salesLabel.Size = UDim2.fromOffset(390, 24)
-salesLabel.Position = UDim2.fromOffset(170, 4)
-salesLabel.TextXAlignment = Enum.TextXAlignment.Left
-local progressBack = Instance.new("Frame")
-progressBack.BackgroundColor3 = Color3.fromRGB(240, 230, 218)
-progressBack.BorderSizePixel = 0
-progressBack.Size = UDim2.fromOffset(390, 12)
-progressBack.Position = UDim2.fromOffset(170, 32)
-corner(progressBack, 5)
-progressBack.Parent = bar
-local progressFill = Instance.new("Frame")
-progressFill.BackgroundColor3 = SAGE
-progressFill.BorderSizePixel = 0
-progressFill.Size = UDim2.fromScale(0, 1)
-corner(progressFill, 5)
-progressFill.Parent = progressBack
 
 -- ── 오른쪽 위: 코인 ──
 
@@ -255,7 +250,7 @@ coinMark.Color = Color3.fromRGB(255, 226, 150)
 coinMark.Thickness = 3
 coinMark.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 coinMark.Parent = coinIcon
-local coinLabel = text(coins, "0", 24, Color3.fromRGB(196, 140, 48), ROUND)
+local coinLabel = text(coins, "0", 24, GOLD_TEXT, ROUND)
 coinLabel.Position = UDim2.fromOffset(48, 0)
 coinLabel.Size = UDim2.fromOffset(80, 48)
 coinLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -270,6 +265,27 @@ coinGain.Size = UDim2.fromOffset(120, 28)
 coinGain.TextXAlignment = Enum.TextXAlignment.Right
 coinGain.Visible = false
 local shownWallet: number? = nil
+-- 영업 중 재료·전기를 쓰면 코인 칸 아래로 "-N"이 톡 떨어진다(글자는 안쪽에서 움직이고 자리는 applyScale이 맞춘다)
+local spendHolder = Instance.new("Frame")
+spendHolder.BackgroundTransparency = 1
+spendHolder.AnchorPoint = Vector2.new(1, 0)
+spendHolder.Size = UDim2.fromOffset(120, 28)
+spendHolder.Parent = gui
+local spendLabel = text(spendHolder, "", 20, CORAL, ROUND)
+spendLabel.Size = UDim2.fromScale(1, 1)
+spendLabel.TextXAlignment = Enum.TextXAlignment.Right
+spendLabel.TextTransparency = 1
+local spendSum = 0
+local spendAt = 0
+local function showSpend(amount: number)
+	local now = os.clock()
+	spendSum = if now - spendAt < 0.8 then spendSum + amount else amount
+	spendAt = now
+	spendLabel.Text = `-{spendSum}`
+	spendLabel.TextTransparency = 0
+	spendLabel.Position = UDim2.fromOffset(0, 0)
+	TweenService:Create(spendLabel, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.fromOffset(0, 26), TextTransparency = 1 }):Play()
+end
 -- 숫자가 띠롱띠롱 올라가게: 표시하는 값은 NumberValue를 트윈한다
 local coinValue = Instance.new("NumberValue")
 coinValue:GetPropertyChangedSignal("Value"):Connect(function()
@@ -277,7 +293,6 @@ coinValue:GetPropertyChangedSignal("Value"):Connect(function()
 end)
 local coinPop = Instance.new("UIScale")
 coinPop.Parent = coinIcon
-local salesValue = Instance.new("NumberValue")
 
 local toast = text(gui, "", 19, WHITE)
 toast.AnchorPoint = Vector2.new(0.5, 0)
@@ -300,6 +315,7 @@ side.Parent = gui
 list(side, Enum.FillDirection.Vertical, 8)
 
 local tip = text(gui, "", 16, WHITE)
+tip.TextWrapped = false -- 버튼에 붙여 띄울 때 버튼 폭에 맞춰 한 글자씩 줄이 바뀌지 않게(글자 길이만큼 넓어진다)
 tip.AnchorPoint = Vector2.new(1, 0.5)
 tip.AutomaticSize = Enum.AutomaticSize.X
 tip.Size = UDim2.fromOffset(0, 32)
@@ -363,11 +379,67 @@ end)
 --   ⏭ DAY 패스: 아침·밤이면 정산 없이 다음 DAY 아침으로, 영업 중이면 바로 마감(정산은 그대로)
 local stopButton = iconButton("⏹", "", "관리자: 영업 그만하기", 6)
 local adminButton = iconButton("⏭", "", "관리자: DAY 패스", 7)
+-- 💰 코인 받기(개발자용): 누르면 왼쪽에 작은 창. 칸에 적은 만큼(음수면 뺀다) 또는 +100·+1000·+10000을 바로 받는다.
+local coinAdminButton = iconButton("💰", "", "관리자: 코인 받기", 8)
+local coinAdmin = frame(coinAdminButton, UDim2.fromOffset(250, 104))
+coinAdmin.AnchorPoint = Vector2.new(1, 0)
+coinAdmin.Position = UDim2.new(0, -10, 0, 0)
+coinAdmin.Visible = false
+pad(coinAdmin, 10, 8)
+local coinAdminTitle = text(coinAdmin, "코인 받기 (개발자용)", 14, MUTED)
+coinAdminTitle.Size = UDim2.new(1, 0, 0, 18)
+coinAdminTitle.TextXAlignment = Enum.TextXAlignment.Left
+local coinBox = Instance.new("TextBox")
+coinBox.Position = UDim2.fromOffset(0, 24)
+coinBox.Size = UDim2.new(1, -74, 0, 34)
+coinBox.BackgroundColor3 = WHITE
+coinBox.BorderSizePixel = 0
+coinBox.Font = BODY
+coinBox.TextSize = 18
+coinBox.TextColor3 = INK
+coinBox.PlaceholderText = "코인 수"
+coinBox.Text = "1000"
+coinBox.ClearTextOnFocus = false
+corner(coinBox, 8)
+stroke(coinBox)
+coinBox.Parent = coinAdmin
+local function grant(amount: number?)
+	if amount and amount == amount and amount ~= 0 then
+		adminEvent:FireServer("coins", math.floor(amount))
+	end
+end
+local coinGive = button(coinAdmin, "받기", UDim2.fromOffset(66, 34), GOLD)
+coinGive.AnchorPoint = Vector2.new(1, 0)
+coinGive.Position = UDim2.new(1, 0, 0, 24)
+coinGive.Activated:Connect(function()
+	grant(tonumber(coinBox.Text))
+end)
+coinBox.FocusLost:Connect(function(enter: boolean)
+	if enter then
+		grant(tonumber(coinBox.Text))
+	end
+end)
+for i, amount in { 100, 1000, 10000 } do
+	local quick = button(coinAdmin, `+{amount}`, UDim2.new(1 / 3, -4, 0, 28), PAPER, GOLD_TEXT)
+	quick.Position = UDim2.new((i - 1) / 3, if i == 1 then 0 elseif i == 2 then 2 else 4, 0, 64)
+	quick.TextSize = 15
+	stroke(quick)
+	quick.Activated:Connect(function()
+		grant(amount)
+	end)
+end
+coinAdminButton.Activated:Connect(function()
+	coinAdmin.Visible = not coinAdmin.Visible
+end)
 local function updateAdmin()
 	local admin = player:GetAttribute("Admin") == true
 	local playing = state.phase == "open" or state.phase == "countdown" or state.phase == "tutorial"
 	adminButton.Visible = admin
 	stopButton.Visible = admin and playing
+	coinAdminButton.Visible = admin
+	if not admin then
+		coinAdmin.Visible = false
+	end
 end
 player:GetAttributeChangedSignal("Admin"):Connect(updateAdmin)
 adminButton.Activated:Connect(function()
@@ -466,9 +538,20 @@ local function renderRecipe()
 end
 
 local function toggleRecipe()
-	recipe.Visible = not recipe.Visible
-	if recipe.Visible then
+	local recipeScale = recipe:FindFirstChildOfClass("UIScale")
+	local opening = not recipe.Visible or (recipeScale ~= nil and UiDeco.isClosing(recipeScale))
+	if opening then
+		recipe.Visible = true
 		chatMenu.Visible = false
+		if recipeScale then
+			UiDeco.popIn(recipeScale, recipeScale.Scale)
+		end
+	elseif recipeScale then
+		UiDeco.popOut(recipeScale, function()
+			recipe.Visible = false
+		end)
+	else
+		recipe.Visible = false
 	end
 end
 recipeButton.Activated:Connect(toggleRecipe)
@@ -496,7 +579,8 @@ updateHolding()
 -- 플레이 테스트: 740×480에 글씨 17이 작아서 읽기 힘들었다. 창과 글씨를 키우고, 화면에 맞춰 최대 1.5배까지 키운다.
 local PANEL_WIDTH = 880
 local PANEL_HEIGHT = 600
-local NIGHT_HEIGHT = 640 -- 밤에는 정산 장부가 들어가서 더 길다(넘치면 장부가 스크롤된다)
+local NIGHT_HEIGHT = 640 -- 밤 + 장부를 펼쳤을 때(넘치면 장부가 스크롤된다)
+local NIGHT_SHORT_HEIGHT = 430 -- 밤 기본: 숫자 카드와 결과 한 줄만
 local TOP = 52 -- 제목 아래 내용이 시작하는 높이
 
 -- ── 아침·밤 창: 정산·새 메뉴 + 상점 ──
@@ -516,33 +600,83 @@ recordLabel.AnchorPoint = Vector2.new(1, 0)
 recordLabel.Position = UDim2.fromScale(1, 0)
 recordLabel.Size = UDim2.fromOffset(380, 42)
 recordLabel.TextXAlignment = Enum.TextXAlignment.Right
+local recordPop = Instance.new("UIScale")
+recordPop.Parent = recordLabel
+local recordTween: Tween? = nil
+-- 신기록이면 🏆 글자가 콩닥콩닥 커졌다 작아졌다
+local function shineRecord(on: boolean)
+	if on and not recordTween then
+		local tween = TweenService:Create(recordPop, TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Scale = 1.12 })
+		tween:Play()
+		recordTween = tween
+	elseif not on and recordTween then
+		recordTween:Cancel()
+		recordTween = nil
+		recordPop.Scale = 1
+	end
+end
 
--- 새 규칙 카드: 그날 새로 생기는 규칙(글 한 줄로는 눈에 잘 안 띄었다)
+-- ── 새 규칙·새 메뉴 카드 꾸미기 ──
+-- 플레이 테스트: 흰 네모 사진 + 글만 있어서 "쇼핑몰 상품 목록" 같았다. 다른 창처럼 아기 분홍·하늘 파스텔에
+-- 동그란 배지, NEW! 스티커, 코인 값표, 말랑한 칩으로 꾸민다.
+local PINK = Color3.fromRGB(240, 128, 160)
+local BABY_PINK = Color3.fromRGB(255, 241, 246)
+local RIBBON_PINK = Color3.fromRGB(242, 168, 196)
+local SKY = Color3.fromRGB(150, 202, 238)
+local SKY_BG = Color3.fromRGB(236, 247, 255)
+local SKY_TEXT = Color3.fromRGB(70, 140, 200)
+
+-- frame()이 단 테두리·모서리를 바꾼다
+local function restyle(f: GuiObject, color: Color3, thickness: number, radius: number)
+	local border = f:FindFirstChildOfClass("UIStroke")
+	if border then
+		border.Color = color
+		border.Thickness = thickness
+	end
+	local round = f:FindFirstChildOfClass("UICorner")
+	if round then
+		round.CornerRadius = UDim.new(0, radius)
+	end
+end
+
+-- 동그란 분홍 배지(하얀 테두리, 살짝 기울임) 안에 그림 글자
+local function badge(parent: Instance, icon: string, size: number): TextLabel
+	local b = text(parent, icon, math.floor(size * 0.48), WHITE)
+	b.Size = UDim2.fromOffset(size, size)
+	b.BackgroundColor3 = PINK
+	b.BackgroundTransparency = 0
+	b.Rotation = -10
+	corner(b, size // 2)
+	local ring = Instance.new("UIStroke")
+	ring.Color = WHITE
+	ring.Thickness = 3
+	ring.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	ring.Parent = b
+	return b
+end
+
+-- 새 규칙 카드(아침 창): 그날 새로 생기는 규칙(글 한 줄로는 눈에 잘 안 띄었다)
 local RULE_CARD_HEIGHT = 100
 local ruleCard = frame(center, UDim2.new(1, 0, 0, RULE_CARD_HEIGHT))
 ruleCard.Position = UDim2.fromOffset(0, TOP)
-ruleCard.BackgroundColor3 = Color3.fromRGB(255, 234, 222)
+ruleCard.BackgroundColor3 = BABY_PINK
 ruleCard.Visible = false
-local ruleBorder = ruleCard:FindFirstChildOfClass("UIStroke")
-if ruleBorder then
-	ruleBorder.Color = CORAL
-	ruleBorder.Thickness = 3
-end
-local ruleIcon = text(ruleCard, "📢", 32, CORAL)
-ruleIcon.Position = UDim2.fromOffset(8, 0)
-ruleIcon.Size = UDim2.fromOffset(48, RULE_CARD_HEIGHT)
-local ruleTitle = text(ruleCard, "새 규칙!", 21, CORAL, ROUND)
-ruleTitle.Position = UDim2.fromOffset(60, 8)
-ruleTitle.Size = UDim2.new(1, -70, 0, 26)
+restyle(ruleCard, RIBBON_PINK, 3, 26)
+local ruleIcon = badge(ruleCard, "📢", 56)
+ruleIcon.AnchorPoint = Vector2.new(0, 0.5)
+ruleIcon.Position = UDim2.new(0, 16, 0.5, 0)
+local ruleTitle = text(ruleCard, "새 규칙!", 21, PINK, ROUND)
+ruleTitle.Position = UDim2.fromOffset(88, 10)
+ruleTitle.Size = UDim2.new(1, -100, 0, 26)
 ruleTitle.TextXAlignment = Enum.TextXAlignment.Left
 local ruleBody = text(ruleCard, "", 18, INK)
-ruleBody.Position = UDim2.fromOffset(60, 36)
-ruleBody.Size = UDim2.new(1, -70, 0, 58)
+ruleBody.Position = UDim2.fromOffset(88, 38)
+ruleBody.Size = UDim2.new(1, -100, 0, 56)
 ruleBody.TextXAlignment = Enum.TextXAlignment.Left
 ruleBody.TextYAlignment = Enum.TextYAlignment.Top
 
 -- 숫자 카드. 아침: 낼 돈 · 빚 · 연체 · 손님, 밤: 매출 · 낸 돈 · 순수익 · 남은 빚. 글 몇 줄로는 작고 잘 안 보였다.
-type Tile = { box: Frame, label: TextLabel, value: TextLabel, sub: TextLabel }
+type Tile = { box: Frame, label: TextLabel, value: TextLabel, sub: TextLabel, pop: UIScale }
 local stats = Instance.new("Frame")
 stats.BackgroundTransparency = 1
 local TILE_HEIGHT = 116
@@ -565,56 +699,177 @@ for i = 1, 4 do
 	local sub = text(box, "", 16, MUTED)
 	sub.Position = UDim2.fromOffset(0, 82)
 	sub.Size = UDim2.new(1, 0, 0, 22)
-	table.insert(tiles, { box = box, label = label, value = value, sub = sub })
+	local pop = Instance.new("UIScale")
+	pop.Parent = box
+	table.insert(tiles, { box = box, label = label, value = value, sub = sub, pop = pop })
 end
 
--- 새 메뉴 카드: 오늘(아침)·내일(밤 정산)의 새 메뉴를 그림·이름·값·만드는 순서로 크게 보여 준다
+-- 새 메뉴 카드: 오늘(아침 창·영업 시작 알림)의 새 메뉴. 동그란 접시 위 디저트 + NEW! 스티커,
+-- 이름 옆 코인 값표, 만드는 순서는 칩(반죽 ▸ 조합대 ▸ …)으로 보여 준다.
 local MENU_CARD_HEIGHT = 112
 local menuCard = frame(center, UDim2.new(1, 0, 0, MENU_CARD_HEIGHT))
-menuCard.BackgroundColor3 = Color3.fromRGB(232, 245, 253)
+menuCard.BackgroundColor3 = SKY_BG
 menuCard.Visible = false
-local menuBorder = menuCard:FindFirstChildOfClass("UIStroke")
-if menuBorder then
-	menuBorder.Color = Color3.fromRGB(150, 202, 238)
-	menuBorder.Thickness = 3
-end
+restyle(menuCard, SKY, 3, 26)
+-- 접시: 하얀 동그라미 + 하늘 테두리 + 안쪽 연한 원. 디저트(ViewportFrame)는 배경 없이 그 위에 올린다.
+-- (ViewportFrame에는 둥근 모서리가 안 먹어서 검은 테두리 네모로 보였다)
+local plate = Instance.new("Frame")
+plate.Position = UDim2.fromOffset(14, 10)
+plate.Size = UDim2.fromOffset(92, 92)
+plate.BackgroundColor3 = WHITE
+plate.BorderSizePixel = 0
+corner(plate, 46)
+local plateRing = Instance.new("UIStroke")
+plateRing.Color = SKY
+plateRing.Thickness = 4
+plateRing.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+plateRing.Parent = plate
+plate.Parent = menuCard
+local plateInner = Instance.new("Frame")
+plateInner.AnchorPoint = Vector2.new(0.5, 0.5)
+plateInner.Position = UDim2.fromScale(0.5, 0.5)
+plateInner.Size = UDim2.fromScale(0.76, 0.76)
+plateInner.BackgroundColor3 = Color3.fromRGB(246, 251, 255)
+plateInner.BorderSizePixel = 0
+corner(plateInner, 35)
+plateInner.Parent = plate
 local menuView = Instance.new("ViewportFrame")
-menuView.BackgroundColor3 = WHITE
-menuView.Position = UDim2.fromOffset(12, 11)
-menuView.Size = UDim2.fromOffset(90, 90)
+menuView.BackgroundTransparency = 1
+menuView.BorderSizePixel = 0
+menuView.Size = UDim2.fromScale(1, 1)
 menuView.Ambient = Color3.fromRGB(200, 190, 196)
 menuView.LightColor = Color3.fromRGB(255, 246, 250)
 menuView.LightDirection = Vector3.new(-1, -2, -1)
-corner(menuView, 45)
-menuView.Parent = menuCard
-local menuTitle = text(menuCard, "", 20, Color3.fromRGB(70, 140, 200), ROUND)
-menuTitle.Position = UDim2.fromOffset(116, 8)
-menuTitle.Size = UDim2.new(1, -126, 0, 24)
+menuView.Parent = plate
+-- NEW! 스티커: 접시 왼쪽 위에 비스듬히, 살랑살랑 흔들린다
+local newTag = text(menuCard, "NEW!", 15, WHITE, ROUND)
+newTag.Size = UDim2.fromOffset(58, 24)
+newTag.Position = UDim2.fromOffset(2, 4)
+newTag.BackgroundColor3 = PINK
+newTag.BackgroundTransparency = 0
+newTag.Rotation = -14
+newTag.ZIndex = 3
+corner(newTag, 12)
+local newRing = Instance.new("UIStroke")
+newRing.Color = WHITE
+newRing.Thickness = 2
+newRing.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+newRing.Parent = newTag
+TweenService:Create(newTag, TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Rotation = -4 }):Play()
+for _, spot in { { 98, 6, 18 }, { 96, 82, 14 } } do
+	local sparkle = text(menuCard, "✨", spot[3])
+	sparkle.Position = UDim2.fromOffset(spot[1], spot[2])
+	sparkle.Size = UDim2.fromOffset(22, 22)
+	sparkle.ZIndex = 3
+end
+local menuTitle = text(menuCard, "", 18, SKY_TEXT, ROUND)
+menuTitle.Position = UDim2.fromOffset(124, 8)
+menuTitle.Size = UDim2.new(1, -136, 0, 22)
 menuTitle.TextXAlignment = Enum.TextXAlignment.Left
-local menuName = text(menuCard, "", 23, INK)
-menuName.Position = UDim2.fromOffset(116, 34)
-menuName.Size = UDim2.new(1, -126, 0, 30)
-menuName.TextXAlignment = Enum.TextXAlignment.Left
-menuName.RichText = true
-local menuSteps = text(menuCard, "", 18, INK)
-menuSteps.Position = UDim2.fromOffset(116, 68)
-menuSteps.Size = UDim2.new(1, -126, 0, 36)
-menuSteps.TextXAlignment = Enum.TextXAlignment.Left
-menuSteps.TextYAlignment = Enum.TextYAlignment.Top
+-- 이름 + 코인 값표(메뉴마다)
+local menuNames = Instance.new("Frame")
+menuNames.BackgroundTransparency = 1
+menuNames.Position = UDim2.fromOffset(124, 32)
+menuNames.Size = UDim2.new(1, -136, 0, 34)
+menuNames.Parent = menuCard
+list(menuNames, Enum.FillDirection.Horizontal, 10).VerticalAlignment = Enum.VerticalAlignment.Center
+-- 만드는 순서 칩
+local menuSteps = Instance.new("Frame")
+menuSteps.BackgroundTransparency = 1
+menuSteps.Position = UDim2.fromOffset(124, 72)
+menuSteps.Size = UDim2.new(1, -136, 0, 28)
+menuSteps.Parent = menuCard
+list(menuSteps, Enum.FillDirection.Horizontal, 4).VerticalAlignment = Enum.VerticalAlignment.Center
 local shownDish = ""
 
 -- 아이스크림은 맛이 정해져 있지 않아서 보기 좋은 한 가지로 그린다
 local SAMPLE_ICE: Config.IceSpec = { base = "cone", flavors = { "strawberry", "vanilla" }, topping = "sprinkles" }
 
+local function clearItems(parent: Instance)
+	for _, child in parent:GetChildren() do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+end
+
+-- 글자 길이만큼 넓어지는 동글동글 칩
+local function pill(parent: Instance, value: string, size: number, color: Color3, fill: Color3, edge: Color3?, height: number): TextLabel
+	local chip = text(parent, value, size, color)
+	chip.TextWrapped = false
+	chip.AutomaticSize = Enum.AutomaticSize.X
+	chip.Size = UDim2.fromOffset(0, height)
+	chip.BackgroundColor3 = fill
+	chip.BackgroundTransparency = 0
+	corner(chip, height // 2)
+	pad(chip, 9, 0)
+	if edge then
+		local ring = Instance.new("UIStroke")
+		ring.Color = edge
+		ring.Thickness = 2
+		ring.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		ring.Parent = chip
+	end
+	return chip
+end
+
 local function showMenuCard(menus: { MenuView }, title: string)
 	local first = menus[1]
 	menuTitle.Text = title
-	local names = {}
+	clearItems(menuNames)
+	local order = 0
 	for _, menu in menus do
-		table.insert(names, `<b>{menu.name}</b>  <font color="#c48c30">{menu.price}코인</font>`)
+		order += 1
+		local name = text(menuNames, menu.name, 24, INK, ROUND)
+		name.TextWrapped = false
+		name.AutomaticSize = Enum.AutomaticSize.X
+		name.Size = UDim2.fromOffset(0, 34)
+		name.LayoutOrder = order
+		-- 코인 값표: 연노랑 알약 안에 금색 동전 + 값
+		order += 1
+		local price = Instance.new("Frame")
+		price.AutomaticSize = Enum.AutomaticSize.X
+		price.Size = UDim2.fromOffset(0, 28)
+		price.BackgroundColor3 = Color3.fromRGB(255, 243, 210)
+		price.BorderSizePixel = 0
+		price.LayoutOrder = order
+		corner(price, 14)
+		local priceEdge = Instance.new("UIStroke")
+		priceEdge.Color = Color3.fromRGB(246, 214, 140)
+		priceEdge.Thickness = 2
+		priceEdge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		priceEdge.Parent = price
+		pad(price, 7, 0)
+		list(price, Enum.FillDirection.Horizontal, 5).VerticalAlignment = Enum.VerticalAlignment.Center
+		price.Parent = menuNames
+		local coin = Instance.new("Frame")
+		coin.Size = UDim2.fromOffset(18, 18)
+		coin.BackgroundColor3 = GOLD
+		coin.BorderSizePixel = 0
+		coin.LayoutOrder = 1
+		corner(coin, 9)
+		local coinEdge = Instance.new("UIStroke")
+		coinEdge.Color = Color3.fromRGB(255, 226, 150)
+		coinEdge.Thickness = 2
+		coinEdge.Parent = coin
+		coin.Parent = price
+		local priceText = text(price, tostring(menu.price), 18, GOLD_TEXT, ROUND)
+		priceText.TextWrapped = false
+		priceText.AutomaticSize = Enum.AutomaticSize.X
+		priceText.Size = UDim2.fromOffset(0, 28)
+		priceText.LayoutOrder = 2
 	end
-	menuName.Text = table.concat(names, "   ·   ")
-	menuSteps.Text = first.steps
+	clearItems(menuSteps)
+	local steps = string.split(first.steps, " → ")
+	for i, step in steps do
+		if i > 1 then
+			local arrow = text(menuSteps, "▸", 13, PINK)
+			arrow.Size = UDim2.fromOffset(12, 26)
+			arrow.LayoutOrder = i * 2 - 1
+		end
+		local chip = pill(menuSteps, step, 14, INK, WHITE, SKY, 26)
+		chip.LayoutOrder = i * 2
+	end
 	if shownDish ~= first.dish then
 		shownDish = first.dish
 		menuView:ClearAllChildren()
@@ -629,7 +884,6 @@ local function showMenuCard(menus: { MenuView }, title: string)
 		menuView.CurrentCamera = camera
 	end
 end
-
 -- 그날(아침·영업) 또는 내일(밤) 새로 나온 메뉴
 local function freshMenus(): { MenuView }
 	local fresh = {}
@@ -670,12 +924,18 @@ summary.TextXAlignment = Enum.TextXAlignment.Left
 summary.TextYAlignment = Enum.TextYAlignment.Top
 summary.RichText = true
 summary.LineHeight = 1.15
+-- 밤 정산 장부는 접어 둔다(플레이 테스트: 글이 너무 많아 안 읽혔다). 궁금하면 이 버튼으로 펼친다.
+local ledgerOpen = false
+local ledgerToggle = button(summaryBox, "", UDim2.fromOffset(200, 36), PAPER, MUTED)
+ledgerToggle.LayoutOrder = 1
+ledgerToggle.Visible = false
+stroke(ledgerToggle)
 -- 밤 정산 장부: 왼쪽 들어온 돈·나눠 가진 돈, 오른쪽 나간 돈·빚
 local ledger = Instance.new("Frame")
 ledger.BackgroundTransparency = 1
 ledger.Size = UDim2.new(1, -12, 0, 0)
 ledger.AutomaticSize = Enum.AutomaticSize.Y
-ledger.LayoutOrder = 1
+ledger.LayoutOrder = 2
 ledger.Visible = false
 ledger.Parent = summaryBox
 list(ledger, Enum.FillDirection.Horizontal, 20)
@@ -753,24 +1013,162 @@ reopen.Position = UDim2.new(0.5, 0, 1, -56)
 reopen.Visible = false
 
 local panelHidden = false
-browseButton.Activated:Connect(function()
-	panelHidden = true
-	center.Visible = false
-	reopen.Visible = true
-end)
-reopen.Activated:Connect(function()
-	panelHidden = false
-	center.Visible = true
-	reopen.Visible = false
-end)
 
-local countdown = text(gui, "", 110, WHITE, ROUND)
+-- 아래 버튼 줄. 가게 둘러보기·튜토리얼은 처음 시작할 때(DAY 1 아침)만 보인다. 보이는 것만 왼쪽부터 붙인다.
+local function layoutButtons(firstMorning: boolean)
+	browseButton.Visible = firstMorning
+	tutorialButton.Visible = firstMorning
+	local x = 0
+	for _, b in { browseButton, animalButton, shopButton, tutorialButton } do
+		if b.Visible then
+			b.Position = UDim2.new(0, x, 1, 0)
+			x += b.Size.X.Offset + 10
+		end
+	end
+end
+
+-- 3·2·1: 크림색 동그라미에 숫자마다 다른 색 테두리. 숫자가 바뀔 때마다 톡 튀어나오고, 끝나면 "오픈!"
+local COUNT_COLORS = { CORAL, GOLD, SAGE }
+local OPEN_COLOR = Color3.fromRGB(240, 128, 160)
+local countdown = Instance.new("Frame")
+countdown.ZIndex = 40 -- 날짜 넘어가는 커튼 위에
 countdown.AnchorPoint = Vector2.new(0.5, 0.5)
-countdown.Position = UDim2.fromScale(0.5, 0.45)
-countdown.Size = UDim2.fromOffset(240, 140)
-countdown.TextStrokeTransparency = 0.5
-countdown.TextStrokeColor3 = INK
+countdown.Position = UDim2.fromScale(0.5, 0.56) -- 위쪽 새 규칙·새 메뉴 알림과 겹치지 않게
+countdown.Size = UDim2.fromOffset(170, 170)
+countdown.BackgroundColor3 = PAPER
+countdown.BorderSizePixel = 0
 countdown.Visible = false
+corner(countdown, 85)
+countdown.Parent = gui
+local countRing = Instance.new("UIStroke")
+countRing.Thickness = 10
+countRing.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+countRing.Parent = countdown
+local countPop = Instance.new("UIScale")
+countPop.Parent = countdown
+local countNumber = text(countdown, "", 108, CORAL, ROUND)
+countNumber.Size = UDim2.fromScale(1, 1)
+local countSeq = 0
+local shownCount = 0
+
+local function popCount(label: string, color: Color3, size: number)
+	countdown.Visible = true
+	countNumber.Text = label
+	countNumber.TextSize = size
+	countNumber.TextColor3 = color
+	countRing.Color = color
+	countPop.Scale = 1.7
+	countdown.Rotation = -14
+	local info = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	TweenService:Create(countPop, info, { Scale = 1 }):Play()
+	TweenService:Create(countdown, info, { Rotation = 0 }):Play()
+end
+
+local function showCount(n: number)
+	if n == shownCount then
+		return
+	end
+	shownCount = n
+	countSeq += 1
+	popCount(tostring(n), COUNT_COLORS[math.clamp(n, 1, #COUNT_COLORS)], 108)
+end
+
+local function hideCount()
+	countSeq += 1
+	shownCount = 0
+	countdown.Visible = false
+end
+
+-- 영업 시작: "오픈!"을 잠깐 보여 주고 쏙 들어간다
+local function showOpen()
+	countSeq += 1
+	local seq = countSeq
+	shownCount = 0
+	popCount("오픈!", OPEN_COLOR, 48)
+	task.delay(0.7, function()
+		if seq ~= countSeq then
+			return
+		end
+		TweenService:Create(countPop, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.In), { Scale = 0 }):Play()
+		task.delay(0.2, function()
+			if seq == countSeq then
+				countdown.Visible = false
+			end
+		end)
+	end)
+end
+
+-- 영업 끝: 정산 창 전에 가게 화면 가운데서 "오늘 번 돈"이 코인과 함께 올라간다(Config.NightIntroSeconds)
+local earnedShow = Instance.new("Frame")
+earnedShow.BackgroundTransparency = 1
+earnedShow.AnchorPoint = Vector2.new(0.5, 0.5)
+earnedShow.Position = UDim2.fromScale(0.5, 0.42)
+earnedShow.Size = UDim2.fromOffset(560, 180)
+earnedShow.Visible = false
+earnedShow.Parent = gui
+local earnedPop = Instance.new("UIScale")
+earnedPop.Parent = earnedShow
+local earnedTitle = text(earnedShow, "오늘 번 돈", 34, WHITE, ROUND)
+earnedTitle.Size = UDim2.new(1, 0, 0, 46)
+local titleStroke = Instance.new("UIStroke")
+titleStroke.Color = INK
+titleStroke.Thickness = 3
+titleStroke.Parent = earnedTitle
+local earnedRow = Instance.new("Frame")
+earnedRow.BackgroundTransparency = 1
+earnedRow.Position = UDim2.fromOffset(0, 54)
+earnedRow.Size = UDim2.new(1, 0, 0, 120)
+earnedRow.Parent = earnedShow
+local earnedRowList = list(earnedRow, Enum.FillDirection.Horizontal, 18)
+earnedRowList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+earnedRowList.VerticalAlignment = Enum.VerticalAlignment.Center
+-- 큰 코인: 오른쪽 위 코인과 같은 모양(금색 동그라미 + 연한 테두리)에 안쪽 고리. 셀 동안 빙글빙글 뒤집힌다.
+local bigCoinHolder = Instance.new("Frame")
+bigCoinHolder.BackgroundTransparency = 1
+bigCoinHolder.Size = UDim2.fromOffset(100, 100)
+bigCoinHolder.LayoutOrder = 1
+bigCoinHolder.Parent = earnedRow
+local bigCoin = Instance.new("Frame")
+bigCoin.AnchorPoint = Vector2.new(0.5, 0.5)
+bigCoin.Position = UDim2.fromScale(0.5, 0.5)
+bigCoin.Size = UDim2.fromScale(1, 1)
+bigCoin.BackgroundColor3 = GOLD
+bigCoin.BorderSizePixel = 0
+corner(bigCoin, 50)
+bigCoin.Parent = bigCoinHolder
+local bigCoinEdge = Instance.new("UIStroke")
+bigCoinEdge.Color = Color3.fromRGB(255, 226, 150)
+bigCoinEdge.Thickness = 7
+bigCoinEdge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+bigCoinEdge.Parent = bigCoin
+local bigCoinRing = Instance.new("Frame")
+bigCoinRing.AnchorPoint = Vector2.new(0.5, 0.5)
+bigCoinRing.Position = UDim2.fromScale(0.5, 0.5)
+bigCoinRing.Size = UDim2.fromScale(0.6, 0.6)
+bigCoinRing.BackgroundTransparency = 1
+corner(bigCoinRing, 30)
+bigCoinRing.Parent = bigCoin
+local bigCoinInner = Instance.new("UIStroke")
+bigCoinInner.Color = Color3.fromRGB(214, 150, 52)
+bigCoinInner.Thickness = 4
+bigCoinInner.Parent = bigCoinRing
+local earnedNumber = text(earnedRow, "+0", 100, GOLD, ROUND)
+earnedNumber.LayoutOrder = 2
+earnedNumber.TextWrapped = false
+earnedNumber.AutomaticSize = Enum.AutomaticSize.X
+earnedNumber.Size = UDim2.fromOffset(0, 120)
+local numberStroke = Instance.new("UIStroke")
+numberStroke.Color = WHITE
+numberStroke.Thickness = 6
+numberStroke.Parent = earnedNumber
+local numberPop = Instance.new("UIScale")
+numberPop.Parent = earnedNumber
+local earnedValue = Instance.new("NumberValue")
+earnedValue:GetPropertyChangedSignal("Value"):Connect(function()
+	earnedNumber.Text = `+{math.floor(earnedValue.Value + 0.5)}`
+end)
+local introSeq = 0
+local introPlaying = false
 
 -- 형광펜: 중요한 말 뒤에 연분홍(경고·빚)이나 연하늘(낼 돈·메뉴) 배경을 깐다(RichText mark)
 local function pink(value: string): string
@@ -814,8 +1212,9 @@ local function updateNightButton()
 	local total = math.max(1, #state.people)
 	local d = state.upcomingDay
 	if r and r.bankrupt then
-		startButton.Text = if mine then "준비 완료!" else "DAY 1 아침으로"
-		readyLabel.Text = `{left}초 뒤 처음부터 · 준비 {#state.ready}/{total}`
+		-- 게임 끝: 로비로 돌아간다(로비가 없으면 이 서버에서 DAY 1부터)
+		startButton.Text = if mine then "준비 완료!" elseif state.toLobby then "로비로 돌아가기" else "DAY 1 아침으로"
+		readyLabel.Text = `{left}초 뒤 {if state.toLobby then "로비로" else "처음부터"} · 준비 {#state.ready}/{total}`
 	elseif total > 1 then
 		startButton.Text = if mine then "준비 완료!" else `DAY {d} 준비`
 		readyLabel.Text = `준비 {#state.ready}/{total} · {left}초 뒤 DAY {d} 시작`
@@ -836,35 +1235,44 @@ local function renderNight(r: Report)
 		elseif r.profit < 0 then `<font color="#e0705a">적자</font>`
 		else `<font color="#6fa868">흑자!</font>`
 	heading.Text = `DAY {state.day} 정산   {status}`
-	setTile(1, "오늘 매출", `+{r.earned}`, GOLD, `손님 {today.served}명 · 돌아간 {today.missed}명`)
-	setTile(2, "오늘 낸 돈", `-{r.bill}`, CORAL, `운영비 {r.operating} · 월세·상환 {r.bill - r.operating}`)
+	local mineNow = me()
 	local mine = myShare(r)
 	local mineText = if not mine then "" elseif r.profit >= 0 then `내 몫 +{mine.change}` else `내가 메운 돈 {-mine.change}`
-	setTile(3, "순수익", signed(r.profit), if r.profit >= 0 then SAGE else CORAL, mineText)
-	setTile(4, "남은 빚", if r.bankrupt then "파산" else tostring(r.debt), if r.strikes > 0 then CORAL else INK, if r.strikes > 0 then `연체 {r.strikes}/{maxStrikes}` else "연체 없음")
+	if r.bankrupt then
+		-- 최종 결과: 이번 가게가 버틴 날, 연 뒤 총 매출·받은 손님, 내 최고 기록
+		setTile(1, "버틴 날", `DAY {r.survived}`, CORAL, if r.survived > 0 then `{r.survived}일 동안 영업` else "첫날 파산")
+		setTile(2, "총 매출", tostring(r.runSales), GOLD, `손님 {r.runServed}명`)
+		setTile(3, "오늘 순수익", signed(r.profit), if r.profit >= 0 then SAGE else CORAL, mineText)
+		setTile(4, "최고 기록", if mineNow and mineNow.best > 0 then `DAY {mineNow.best}` else "-", INK, if mineNow and mineNow.best > 0 then `매출 {mineNow.bestSales}` else "")
+	else
+		setTile(1, "오늘 매출", `+{r.earned}`, GOLD, `손님 {today.served}명 · 돌아간 {today.missed}명`)
+		setTile(2, "오늘 낸 돈", `-{r.bill}`, CORAL, `운영비 {r.operating} · 월세·상환 {r.bill - r.operating}`)
+		setTile(3, "순수익", signed(r.profit), if r.profit >= 0 then SAGE else CORAL, mineText)
+		setTile(4, "남은 빚", tostring(r.debt), if r.strikes > 0 then CORAL else INK, if r.strikes > 0 then `연체 {r.strikes}/{maxStrikes}` else "연체 없음")
+	end
 
+	-- 결과는 한 줄만: 숫자는 위 카드에 있고, 자세한 건 접힌 장부에 있다
 	local count = #r.shares
 	local result: string
 	if r.bankrupt then
-		result = `{pink(`<b>연체가 {maxStrikes}번 쌓여 가게가 문을 닫았어요.</b>`)}\n빚 {Config.Debt.start}을 다시 지고 DAY 1 아침부터 다시 시작해요. 지갑과 상점 업그레이드도 처음으로 돌아가요.`
+		local next = if state.toLobby then "로비에서 다시 팀을 짜고 새 가게를 열어요." else "DAY 1부터 다시 시작해요. (지갑·빚·상점 처음으로)"
+		result = `{pink(`<b>연체 {maxStrikes}번! 가게가 문을 닫았어요.</b>`)}\n{next}`
 	elseif r.short > 0 then
-		result = `{pink(`<b>지갑으로 메우고도 {r.short} 모자라서 빚에 더했어요</b> (연체료 +{r.lateFee})`)}\n연체 {r.strikes}/{maxStrikes} · {maxStrikes}번이면 파산해요!`
+		result = `{pink(`<b>⚠ {r.short} 모자라서 빚에 더했어요</b>`)}  ({maxStrikes}번 연체면 파산!)`
 	elseif r.profit < 0 then
-		result = `적자 {-r.profit}을(를) {if count > 1 then `{count}명이 1/n씩` else "내 지갑에서"} 메웠어요.`
+		result = `적자 {-r.profit}은 {if count > 1 then `{count}명이 1/n씩` else "내 지갑에서"} 메웠어요.`
 	elseif count > 1 then
-		result = `순수익 {r.profit}을(를) {count}명이 똑같이 나눠 가졌어요.`
+		result = `순수익을 {count}명이 똑같이 나눠 가졌어요.`
 	else
-		result = `순수익 {r.profit}이(가) 내 지갑에 들어왔어요.`
+		result = `순수익이 내 지갑에 들어왔어요.`
 	end
-	-- 최고 기록: 새로 세웠으면 크게, 파산했으면 이번에 며칠 버텼는지
-	local mineNow = me()
-	local record = ""
-	if table.find(r.newRecords, player.UserId) then
-		record = `{sky(`<b>🏆 신기록! DAY {r.survived}까지 버텼어요!</b>`)}\n`
-	elseif r.bankrupt and r.survived > 0 then
-		record = `이번 가게는 <b>DAY {r.survived}</b>까지 버텼어요. (최고 기록 DAY {if mineNow then mineNow.best else r.survived})\n`
+	summary.Text = result
+	-- 신기록은 따로 줄을 쓰지 않고 오른쪽 위 🏆 자리에 띄운다(콩닥콩닥)
+	local isNew = table.find(r.newRecords, player.UserId) ~= nil
+	if isNew then
+		recordLabel.Text = `✨🏆 신기록! DAY {r.survived} · 매출 {r.runSales}`
 	end
-	summary.Text = record .. result
+	shineRecord(isNew)
 
 	local incomeTotal = 0
 	for _, item in r.income do
@@ -894,16 +1302,19 @@ local function renderCenter()
 	local d = state.upcomingDay
 	local report = state.report
 	local night = phase == "night" and report ~= nil
-	center.Size = UDim2.fromOffset(PANEL_WIDTH, if night then NIGHT_HEIGHT else PANEL_HEIGHT)
+	center.Size = UDim2.fromOffset(PANEL_WIDTH, if not night then PANEL_HEIGHT elseif ledgerOpen then NIGHT_HEIGHT else NIGHT_SHORT_HEIGHT)
 	-- 새 규칙·새 메뉴 카드는 아침에만. 밤에는 장부 자리가 좁아서 빼고, 영업을 시작할 때 화면 위에 잠깐 보여 준다(showAnnounce).
 	local hasRules = #state.rules > 0 and not night
 	-- 위에서부터: 숫자 카드 → (아침) 새 규칙 카드 → 새 메뉴 카드 → 글·장부
 	local y = TOP + TILE_HEIGHT + 10
 	stats.Visible = true
-	ledger.Visible = night
+	ledger.Visible = night and ledgerOpen
+	ledgerToggle.Visible = night
+	ledgerToggle.Text = if ledgerOpen then "장부 접기 ▴" else "장부 자세히 보기 ▾"
+	summary.TextSize = if night then 24 else 22
 	readyLabel.Visible = night
 	local mine = me()
-	recordLabel.Text = if mine and mine.best > 0 then `🏆 최고 기록 DAY {mine.best}` else "🏆 첫 도전!"
+	recordLabel.Text = if mine and mine.best > 0 then `🏆 최고 DAY {mine.best} · 매출 {mine.bestSales}` else "🏆 첫 도전!"
 	ruleCard.Visible = hasRules
 	ruleCard.Position = UDim2.fromOffset(0, y)
 	ruleTitle.Text = "새 규칙!"
@@ -927,10 +1338,12 @@ local function renderCenter()
 	summaryBox.CanvasPosition = Vector2.zero
 	heading.RichText = true
 	if report and night then
+		layoutButtons(false)
 		renderNight(report)
 		return
 	end
 	-- 아침: 숫자 카드와 짧은 안내만(메뉴 조합·키 설명은 레시피북 R에 있다)
+	layoutButtons(phase == "morning" and d == 1)
 	heading.Text = `DAY {d}`
 	local money = state.money
 	setTile(1, "오늘 밤 낼 돈", `{money.rent + money.due + money.basePower}+`, CORAL, "고정비 + 쓴 만큼")
@@ -941,13 +1354,14 @@ local function renderCenter()
 	summary.Text = if d == 1
 		then `말풍선 주문대로 디저트를 만들어 손님 앞에 내 주세요.\n{warn}\n처음이면 아래 {sky("<b>튜토리얼</b>")}부터!`
 		else `오늘도 달콤하게!\n{warn}`
+	shineRecord(false)
 	startButton.Text = `DAY {d} 영업 시작`
 	startButton.BackgroundColor3 = CORAL
 end
 
 -- 창이 작으면 HUD도 같이 줄인다(작은 Studio 창·휴대폰에서 화면을 가리지 않게)
 local scales: { UIScale } = {}
-local scaled: { GuiObject } = { bar, coins, coinGain, toast, side, chatMenu, recipe, holding, reopen }
+local scaled: { GuiObject } = { bar, coins, coinGain, spendHolder, toast, side, chatMenu, recipe, holding, reopen }
 for _, object in scaled do
 	local s = Instance.new("UIScale")
 	s.Parent = object
@@ -969,18 +1383,19 @@ local function applyScale()
 	toast.Position = UDim2.new(0.5, 0, 0, top)
 	side.Position = UDim2.new(1, -10, 0, top)
 	coinGain.Position = UDim2.new(1, -math.floor(254 * s), 0, math.floor(14 * s))
+	spendHolder.Position = UDim2.new(1, -math.floor(254 * s), 0, math.floor(36 * s))
 	recipe.Position = UDim2.new(1, -math.floor(10 + 56 * s), 0, top)
 	chatMenu.Position = UDim2.new(1, -math.floor(10 + 56 * s), 0, top + math.floor(54 * s))
 end
+ledgerToggle.Activated:Connect(function()
+	ledgerOpen = not ledgerOpen
+	renderCenter()
+	applyScale() -- 창 높이가 바뀌어서 다시 맞춘다
+end)
 local currentCamera = workspace.CurrentCamera
 if currentCamera then
 	currentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(applyScale)
 end
-
-local function salesText()
-	salesLabel.Text = `금고 {math.floor(salesValue.Value + 0.5)} · 지출 {state.money.spent} · 밤에 낼 돈 {nightBill()}`
-end
-salesValue:GetPropertyChangedSignal("Value"):Connect(salesText)
 
 -- 영업을 시작할 때 화면 위에 잠깐 크게 보여 주고 스르륵 사라지는 알림: 그날 새 규칙, 그날 새 메뉴(아침 창의 새 메뉴 카드를 옮겨 쓴다)
 local ANNOUNCE_SECONDS = 7 -- 카운트다운(3초)이 시작될 때부터 이만큼 보인다
@@ -990,7 +1405,7 @@ local announce = Instance.new("Frame")
 announce.BackgroundTransparency = 1
 announce.AnchorPoint = Vector2.new(0.5, 0)
 announce.Position = UDim2.new(0.5, 0, 0, ANNOUNCE_Y)
-announce.Size = UDim2.fromOffset(640, 0)
+announce.Size = UDim2.fromOffset(700, 0)
 announce.AutomaticSize = Enum.AutomaticSize.Y
 announce.Visible = false
 announce.Parent = gui
@@ -999,13 +1414,23 @@ local announceScale = Instance.new("UIScale")
 announceScale.Parent = announce
 local dayRule = frame(announce, UDim2.new(1, 0, 0, 0))
 dayRule.AutomaticSize = Enum.AutomaticSize.Y
-dayRule.BackgroundColor3 = Color3.fromRGB(255, 234, 222)
+dayRule.BackgroundColor3 = BABY_PINK
 dayRule.LayoutOrder = 1
 dayRule.Visible = false
-pad(dayRule, 16, 12)
+restyle(dayRule, RIBBON_PINK, 3, 26)
+local dayRulePad = Instance.new("UIPadding")
+dayRulePad.PaddingLeft = UDim.new(0, 76)
+dayRulePad.PaddingRight = UDim.new(0, 18)
+dayRulePad.PaddingTop = UDim.new(0, 14)
+dayRulePad.PaddingBottom = UDim.new(0, 14)
+dayRulePad.Parent = dayRule
+local dayRuleBadge = badge(dayRule, "📢", 46)
+dayRuleBadge.AnchorPoint = Vector2.new(0, 0.5)
+dayRuleBadge.Position = UDim2.new(0, -62, 0.5, 0)
 local dayRuleText = text(dayRule, "", 18, INK)
 dayRuleText.Size = UDim2.new(1, 0, 0, 0)
 dayRuleText.AutomaticSize = Enum.AutomaticSize.Y
+dayRuleText.TextXAlignment = Enum.TextXAlignment.Left
 dayRuleText.RichText = true
 local lastPhase = ""
 
@@ -1043,15 +1468,17 @@ local function showAnnounce(rules: { string }, fresh: { MenuView })
 	announceSeq += 1
 	local seq = announceSeq
 	dayRule.Visible = #rules > 0
-	dayRuleText.Text = `<font color="#ec8464"><b>📢 새 규칙!</b></font>  {table.concat(rules, " ")}`
+	dayRuleText.Text = `<font color="#f080a0"><b>새 규칙!</b></font>  {table.concat(rules, " ")}`
 	if #fresh > 0 then
 		menuCard.Parent = announce
 		menuCard.LayoutOrder = 2
 		menuCard.Visible = true
 		showMenuCard(fresh, "🍨 오늘의 새 메뉴!")
 	end
-	announce.Position = UDim2.new(0.5, 0, 0, ANNOUNCE_Y)
+	-- 위에서 통! 하고 내려온다
+	announce.Position = UDim2.new(0.5, 0, 0, ANNOUNCE_Y - 60)
 	announce.Visible = true
+	TweenService:Create(announce, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, 0, 0, ANNOUNCE_Y) }):Play()
 	task.delay(ANNOUNCE_SECONDS, function()
 		if seq ~= announceSeq then
 			return
@@ -1079,10 +1506,222 @@ local function showAnnounce(rules: { string }, fresh: { MenuView })
 	end)
 end
 
+-- 오른쪽 위 코인: 바뀐 만큼 숫자가 올라가거나 내려간다(오르면 코인이 톡 튀고 "+N"이 떴다 사라진다)
+local holdCoinsUntil = 0 -- 날아가는 코인이 지갑에 닿을 때까지(Earned)
+local coinsPending = false
+local function updateCoins()
+	local amount = liveCoins()
+	local before = shownWallet
+	debtLabel.Text = if state.debt > 0 then `빚 {state.debt}` else "빚 없음"
+	local wait = holdCoinsUntil - os.clock()
+	if before ~= nil and amount > before and wait > 0 then
+		if not coinsPending then
+			coinsPending = true
+			task.delay(wait, function()
+				coinsPending = false
+				updateCoins()
+			end)
+		end
+		return
+	end
+	if before ~= nil and amount < before and state.phase == "open" then
+		showSpend(before - amount)
+	end
+	if before == nil then
+		coinValue.Value = amount
+	elseif amount ~= before then
+		local rising = amount > before
+		TweenService:Create(coinValue, TweenInfo.new(if rising then 0.6 else 0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Value = amount }):Play()
+		if rising then
+			coinPop.Scale = 1.5
+			TweenService:Create(coinPop, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+			coinGain.Text = `+{amount - before}`
+			coinGain.Visible = true
+			coinGain.TextTransparency = 0
+			TweenService:Create(coinGain, TweenInfo.new(1.2), { TextTransparency = 1 }):Play()
+		end
+	end
+	coinLabel.TextColor3 = if amount < 0 then CORAL else GOLD_TEXT
+	shownWallet = amount
+end
+
+-- 흔들흔들(연체·파산 경고): 좌우로 몇 번 기울었다 돌아온다
+local function shake(object: GuiObject)
+	task.spawn(function()
+		for _, angle in { 6, -6, 5, -5, 3, -3, 0 } do
+			object.Rotation = angle
+			task.wait(0.045)
+		end
+	end)
+end
+
+-- 정산 숫자 카드가 하나씩 톡톡. 연체·파산이면 남은 빚 카드와 제목이 흔들린다.
+local function popTiles()
+	for i, tile in tiles do
+		tile.pop.Scale = 0.2
+		TweenService:Create(tile.pop, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 0, false, 0.08 + (i - 1) * 0.09), { Scale = 1 }):Play()
+	end
+	local r = state.report
+	if r and (r.short > 0 or r.bankrupt) then
+		task.delay(0.6, function()
+			shake(tiles[4].box)
+			shake(heading)
+		end)
+	end
+end
+
+-- 가운데 창: 보일 때 말랑 팝(크기는 applyScale 뒤에 popPanel이 맞춘다), 숨길 때 쏙
+local panelPopPending = false
+local function showPanel()
+	local inMenu = state.phase == "morning" or state.phase == "night"
+	local want = inMenu and not panelHidden and not introPlaying
+	if want and (not center.Visible or UiDeco.isClosing(scale)) then
+		center.Visible = true
+		panelPopPending = true
+	elseif not want and center.Visible and not UiDeco.isClosing(scale) then
+		UiDeco.popOut(scale, function()
+			center.Visible = false
+		end)
+	end
+	reopen.Visible = inMenu and panelHidden and not introPlaying
+end
+
+local function popPanel()
+	if not panelPopPending then
+		return
+	end
+	panelPopPending = false
+	UiDeco.popIn(scale, scale.Scale)
+	if state.phase == "night" and state.report then
+		popTiles()
+	end
+end
+
+browseButton.Activated:Connect(function()
+	panelHidden = true
+	showPanel()
+end)
+reopen.Activated:Connect(function()
+	panelHidden = false
+	showPanel()
+	applyScale()
+	popPanel()
+end)
+
+local function stopIntro()
+	introSeq += 1
+	introPlaying = false
+	earnedShow.Visible = false
+end
+
+-- 영업 끝 → "오늘 번 돈"이 0부터 올라가고 → 정산 창. 오른쪽 위 코인(월세 등이 빠진 지갑)도 정산 창과 같이 바뀐다.
+local function playIntro(earned: number)
+	introSeq += 1
+	local seq = introSeq
+	introPlaying = true
+	showPanel()
+	earnedShow.Visible = true
+	earnedPop.Scale = 0.3
+	TweenService:Create(earnedPop, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	earnedValue.Value = 0
+	earnedNumber.Text = "+0"
+	numberPop.Scale = 1
+	local countTime = 1.5
+	TweenService:Create(earnedValue, TweenInfo.new(countTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0.3), { Value = earned }):Play()
+	bigCoin.Size = UDim2.fromScale(1, 1)
+	TweenService:Create(bigCoin, TweenInfo.new(0.15, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 4, true, 0.3), { Size = UDim2.fromScale(0.08, 1) }):Play()
+	task.delay(0.3 + countTime, function()
+		if seq == introSeq then
+			numberPop.Scale = 1.3
+			TweenService:Create(numberPop, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		end
+	end)
+	local total = Config.NightIntroSeconds
+	task.delay(total - 0.25, function()
+		if seq == introSeq then
+			TweenService:Create(earnedPop, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In), { Scale = 0 }):Play()
+		end
+	end)
+	task.delay(total, function()
+		if seq ~= introSeq then
+			return
+		end
+		stopIntro()
+		updateCoins()
+		if state.phase == "night" and state.report then
+			renderCenter()
+		end
+		showPanel()
+		applyScale()
+		popPanel()
+	end)
+end
+
+-- ── 날짜가 바뀔 때: 분홍 땡땡이 커튼이 왼쪽에서 쓱 들어와 "DAY N"을 보여 주고 오른쪽으로 빠진다 ──
+local curtain = Instance.new("Frame")
+curtain.Size = UDim2.fromScale(1, 1)
+curtain.Position = UDim2.fromScale(-1, 0)
+curtain.BackgroundColor3 = Color3.fromRGB(248, 214, 226)
+curtain.BorderSizePixel = 0
+curtain.ZIndex = 30
+curtain.Visible = false
+curtain.Parent = gui
+for row = 0, 7 do
+	for col = 0, 11 do
+		local dot = Instance.new("Frame")
+		dot.AnchorPoint = Vector2.new(0.5, 0.5)
+		dot.Position = UDim2.fromScale((col + (if row % 2 == 0 then 0.25 else 0.75)) / 12, (row + 0.5) / 8)
+		dot.Size = UDim2.fromOffset(22, 22)
+		dot.BackgroundColor3 = WHITE
+		dot.BackgroundTransparency = 0.35
+		dot.BorderSizePixel = 0
+		dot.ZIndex = 30
+		corner(dot, 11)
+		dot.Parent = curtain
+	end
+end
+local curtainDay = text(curtain, "", 96, WHITE, ROUND)
+curtainDay.AnchorPoint = Vector2.new(0.5, 0.5)
+curtainDay.Position = UDim2.fromScale(0.5, 0.44)
+curtainDay.Size = UDim2.fromOffset(600, 120)
+curtainDay.ZIndex = 31
+local curtainStroke = Instance.new("UIStroke")
+curtainStroke.Color = Color3.fromRGB(236, 120, 150)
+curtainStroke.Thickness = 5
+curtainStroke.Parent = curtainDay
+local curtainSub = text(curtain, "오늘도 달콤하게! 🍓", 28, Color3.fromRGB(200, 90, 120), ROUND)
+curtainSub.AnchorPoint = Vector2.new(0.5, 0.5)
+curtainSub.Position = UDim2.fromScale(0.5, 0.56)
+curtainSub.Size = UDim2.fromOffset(600, 40)
+curtainSub.ZIndex = 31
+local curtainSeq = 0
+local lastDay = 0
+
+local function playCurtain(day: number)
+	curtainSeq += 1
+	local seq = curtainSeq
+	curtainDay.Text = `DAY {day}`
+	curtain.Position = UDim2.fromScale(-1, 0)
+	curtain.Visible = true
+	TweenService:Create(curtain, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.fromScale(0, 0) }):Play()
+	task.delay(0.8, function()
+		if seq ~= curtainSeq then
+			return
+		end
+		TweenService:Create(curtain, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.fromScale(1, 0) }):Play()
+		task.delay(0.35, function()
+			if seq == curtainSeq then
+				curtain.Visible = false
+			end
+		end)
+	end)
+end
+
 local function applyState(incoming: State)
 	state = incoming
 	local phase = state.phase
-	if phase == "countdown" and lastPhase ~= "countdown" then
+	local previous = lastPhase
+	if phase == "countdown" and previous ~= "countdown" then
 		showAnnounce(state.rules, freshMenus())
 	end
 	lastPhase = phase
@@ -1090,57 +1729,41 @@ local function applyState(incoming: State)
 	if not inMenu then
 		panelHidden = false
 	end
-	center.Visible = inMenu and not panelHidden
-	reopen.Visible = inMenu and panelHidden
+	if phase == "night" and previous == "open" and state.report then
+		playIntro(state.report.earned)
+	elseif phase ~= "night" and introPlaying then
+		stopIntro()
+	end
+	showPanel()
 	local tutorial = phase == "tutorial"
 	bar.Visible = phase == "open" or phase == "countdown" or tutorial
-	countdown.Visible = phase == "countdown"
-	dayChip.Text = if tutorial then "연습" else `DAY {state.day}`
-	if tutorial then
-		salesLabel.Text = "튜토리얼 중 (코인 없음)"
-	elseif state.till < salesValue.Value then
-		salesValue.Value = state.till -- 새 날: 바로 줄인다
-		salesText()
-	else
-		TweenService:Create(salesValue, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Value = state.till }):Play()
-		salesText()
+	-- 3·2·1은 RenderStepped가 숫자가 바뀔 때마다 띄운다(showCount)
+	if phase == "open" and previous == "countdown" then
+		showOpen()
+	elseif phase ~= "open" and phase ~= "countdown" then
+		hideCount()
 	end
-	progressBack.Visible = not tutorial
+	dayChip.Text = if tutorial then "연습" else `DAY {state.day}`
 	if tutorial then
 		timeLabel.Text = ""
 	end
-	local wallet = myWallet()
-	local before = shownWallet
-	if before == nil then
-		coinValue.Value = wallet
-	else
-		local rising = wallet > before
-		TweenService:Create(coinValue, TweenInfo.new(if rising then 0.7 else 0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Value = wallet }):Play()
-		if rising then
-			coinPop.Scale = 1.5
-			TweenService:Create(coinPop, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-		end
+	-- 정산 창이 뜨기 전("오늘 번 돈"이 올라가는 동안)에는 오른쪽 위 코인을 그대로 둔다
+	if not introPlaying then
+		updateCoins()
 	end
-	debtLabel.Text = if state.debt > 0 then `빚 {state.debt}` else "빚 없음"
-	if before and wallet > before then
-		coinGain.Text = `+{wallet - before}`
-		coinGain.Visible = true
-		coinGain.TextTransparency = 0
-		local fade = TweenService:Create(coinGain, TweenInfo.new(1.2), { TextTransparency = 1 })
-		fade:Play()
-	end
-	shownWallet = wallet
-	-- 막대: 금고가 오늘 밤 낼 돈을 얼마나 채웠는지(다 채우면 초록, 아직이면 주황)
-	local bill = nightBill()
-	progressFill.BackgroundColor3 = if state.till >= bill then SAGE else CORAL
-	TweenService:Create(progressFill, TweenInfo.new(0.5), { Size = UDim2.fromScale(math.clamp(state.till / math.max(bill, 1), 0, 1), 1) }):Play()
 	if inMenu then
 		renderCenter()
 	end
 	renderRecipe()
 	applyScale()
+	popPanel()
 	announceScale.Scale = scales[1].Scale -- 위 바와 같은 크기로
 	updateAdmin()
+	-- 날짜가 바뀌면(다음 날 시작·파산 뒤 처음부터) 분홍 커튼이 쓱 지나간다
+	if lastDay ~= 0 and state.day ~= lastDay and (phase == "countdown" or phase == "morning") then
+		playCurtain(state.day)
+	end
+	lastDay = state.day
 end
 
 local function clock(seconds: number): string
@@ -1154,7 +1777,7 @@ RunService.RenderStepped:Connect(function()
 		timeLabel.Text = clock(state.endsAt - t)
 	elseif state.phase == "countdown" then
 		timeLabel.Text = clock(state.daySeconds)
-		countdown.Text = tostring(math.max(1, math.ceil(state.endsAt - t)))
+		showCount(math.max(1, math.ceil(state.endsAt - t)))
 	elseif state.phase == "night" and state.report then
 		updateNightButton()
 	end
@@ -1190,5 +1813,110 @@ end)
 
 stateEvent.OnClientEvent:Connect(function(incoming: State)
 	applyState(incoming)
+end)
+
+-- ── 서빙하면 코인이 손님 자리에서 오른쪽 위 지갑으로 날아간다. 팀 콤보·단체 보너스면 색종이도 펑! ──
+local CONFETTI = {
+	Color3.fromRGB(255, 170, 200),
+	Color3.fromRGB(150, 210, 245),
+	Color3.fromRGB(255, 220, 120),
+	Color3.fromRGB(170, 225, 190),
+	Color3.fromRGB(205, 180, 245),
+}
+
+-- 이 화면(IgnoreGuiInset)의 좌표: 월드 위치는 그대로, AbsolutePosition은 위쪽 메뉴 바 높이만큼 더한다
+local function screenPoint(world: Vector3): Vector2
+	local camera = workspace.CurrentCamera
+	if camera then
+		local p = camera:WorldToViewportPoint(world)
+		if p.Z > 0 then
+			return Vector2.new(p.X, p.Y)
+		end
+		return Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y * 0.7)
+	end
+	return Vector2.new(400, 400)
+end
+
+local function walletPoint(): Vector2
+	return coinIcon.AbsolutePosition + coinIcon.AbsoluteSize / 2 + GuiService:GetGuiInset()
+end
+
+local function flyCoins(from: Vector2, amount: number)
+	local count = math.clamp(math.floor(amount / 6) + 2, 3, 8)
+	for i = 1, count do
+		local coin = Instance.new("Frame")
+		coin.AnchorPoint = Vector2.new(0.5, 0.5)
+		coin.Size = UDim2.fromOffset(24, 24)
+		coin.Position = UDim2.fromOffset(from.X, from.Y)
+		coin.BackgroundColor3 = GOLD
+		coin.BorderSizePixel = 0
+		coin.ZIndex = 20
+		corner(coin, 12)
+		local edge = Instance.new("UIStroke")
+		edge.Color = Color3.fromRGB(255, 226, 150)
+		edge.Thickness = 3
+		edge.Parent = coin
+		coin.Parent = gui
+		-- 톡 흩어졌다가
+		local angle = math.random() * math.pi * 2
+		local spread = from + Vector2.new(math.cos(angle), math.sin(angle)) * (30 + math.random() * 45)
+		TweenService:Create(coin, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.fromOffset(spread.X, spread.Y) }):Play()
+		-- 하나씩 지갑으로 쏙
+		task.delay(0.25 + i * 0.05, function()
+			local target = walletPoint()
+			local fly = TweenService:Create(coin, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				Position = UDim2.fromOffset(target.X, target.Y),
+				Size = UDim2.fromOffset(14, 14),
+			})
+			fly.Completed:Once(function()
+				coin:Destroy()
+				coinPop.Scale = 1.35
+				TweenService:Create(coinPop, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+			end)
+			fly:Play()
+		end)
+	end
+end
+
+local function confetti(from: Vector2)
+	for _ = 1, 28 do
+		local piece = Instance.new("Frame")
+		piece.AnchorPoint = Vector2.new(0.5, 0.5)
+		piece.Size = UDim2.fromOffset(math.random(8, 14), math.random(5, 9))
+		piece.Position = UDim2.fromOffset(from.X, from.Y)
+		piece.BackgroundColor3 = CONFETTI[math.random(1, #CONFETTI)]
+		piece.BorderSizePixel = 0
+		piece.Rotation = math.random(0, 360)
+		piece.ZIndex = 19
+		corner(piece, 3)
+		piece.Parent = gui
+		-- 위로 부채꼴로 펑 → 팔랑팔랑 떨어지며 사라짐
+		local angle = -math.pi / 2 + (math.random() - 0.5) * 2.4
+		local peak = from + Vector2.new(math.cos(angle), math.sin(angle)) * (110 + math.random() * 150)
+		TweenService:Create(piece, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Position = UDim2.fromOffset(peak.X, peak.Y),
+			Rotation = piece.Rotation + math.random(-180, 180),
+		}):Play()
+		task.delay(0.45, function()
+			TweenService:Create(piece, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				Position = UDim2.fromOffset(peak.X + (math.random() - 0.5) * 80, peak.Y + 170),
+				Rotation = piece.Rotation + math.random(-360, 360),
+				BackgroundTransparency = 1,
+			}):Play()
+			task.delay(0.95, function()
+				piece:Destroy()
+			end)
+		end)
+	end
+end
+
+earnedEvent.OnClientEvent:Connect(function(position: Vector3, amount: number, _combo: number, _serverId: number?, big: boolean?)
+	local from = screenPoint(position)
+	-- 오른쪽 위 숫자는 코인이 닿을 즈음 오른다(Main이 Earned를 금고보다 먼저 보낸다)
+	holdCoinsUntil = os.clock() + 0.8
+	flyCoins(from, amount)
+	if big then
+		confetti(from)
+	end
 end)
 readyEvent:FireServer()

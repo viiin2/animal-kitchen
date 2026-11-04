@@ -4,4 +4,5 @@
 *.rbxlx.lock
 *.rbxl.lock
 sourcemap.json
+sourcemap.lobby.json
 .DS_Store

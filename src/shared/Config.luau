@@ -37,7 +37,8 @@ local Config = {}
 
 Config.DaySeconds = 180 -- 하루 영업 최대 길이. DAY 1은 120초에서 하루 +15초씩(Config.dayParams)
 Config.CountdownSeconds = 3
-Config.NightSeconds = 30 -- 밤 정산 화면을 보여 주는 시간. 모두 준비를 누르거나 이 시간이 지나면 다음 날 영업이 시작된다
+Config.NightSeconds = 20 -- 밤 정산 화면을 보여 주는 시간. 모두 준비를 누르거나 이 시간이 지나면 다음 날 영업이 시작된다(플레이 테스트: 30초는 길었다)
+Config.NightIntroSeconds = 3 -- 영업이 끝나면 정산 창 전에 가게 화면 가운데서 "오늘 번 돈"이 올라간다. 이 시간은 NightSeconds에 더한다
 Config.WalkSpeed = 13.5 -- 플레이 테스트에서 20은 너무 빨랐다(1/3 줄임)
 Config.PrepSeconds = 1.5 -- 조합대(F 길게)
 Config.SauceSeconds = 1.2 -- 토핑 올리기(F 길게)
@@ -409,6 +410,22 @@ Config.Tutorial = {
 	{ dish = "icecream", spec = { base = "cone", flavors = { "vanilla" } } :: IceSpec },
 	{ dish = "milk_tea" },
 } :: { { dish: string, spec: IceSpec? } }
+
+-- 로비 → 게임: 같은 체험(Experience)에 장소 두 개를 둔다. 로비(시작 장소)에서 팀을 짜면 그 팀만 쓰는 게임 서버로 순간이동하고,
+-- 게임에서 파산하면 로비로 돌아간다. id는 Creator Dashboard(체험 → Places)에서 확인해 넣는다.
+-- 0이면 아직 없음: 순간이동 없이 지금 서버에서 계속한다(Studio에서도 순간이동은 안 된다).
+Config.Places = {
+	lobby = 0,
+	game = 0,
+}
+
+-- 로비 발판: 올라선 1~teamSize명이 한 팀. 처음 올라서면 waitSeconds 뒤 출발, 꽉 차면 fullSeconds 뒤 출발
+Config.Lobby = {
+	teamSize = 4,
+	waitSeconds = 15,
+	fullSeconds = 3,
+	remotes = { Solo = "LobbySolo", Toast = "LobbyToast" },
+}
 
 -- 관리자(테스트용 DAY 패스 버튼): Studio에서는 모두, 실제 서버에서는 게임 주인과 여기 적은 UserId만
 Config.Admins = {} :: { number }

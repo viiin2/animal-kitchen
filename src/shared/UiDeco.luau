@@ -1,6 +1,9 @@
 --!strict
 -- 창 위쪽 장식 띠: 아기 분홍 바탕에 하얀 땡땡이, 아랫단 레이스(반원), 가운데 분홍 리본.
 -- 아침·밤 창, 상점, 동물 고르기, MVP 창이 같이 쓴다(클라이언트 화면 전용). 띠는 내용 뒤(ZIndex 0)에 깔린다.
+-- 창 말랑 팝(popIn·popOut)도 여기 있다.
+local TweenService = game:GetService("TweenService")
+
 local UiDeco = {}
 
 local BABY = Color3.fromRGB(248, 214, 226)
@@ -73,6 +76,43 @@ function UiDeco.header(window: GuiObject, height: number, radius: number, inset:
 		loop.Parent = band
 	end
 	circle(band, 11, UDim2.new(0.5, 0, 0, 0), Color3.fromRGB(226, 128, 160))
+end
+
+-- ── 창 말랑 팝 ──
+-- 창의 UIScale(화면 크기 맞춤용)을 잠깐 줄였다가 통 튀어 target으로(열기), 쏙 줄인 뒤 done(닫기).
+-- 닫는 중에 다시 열면 닫기는 취소된다.
+local popSeq: { [UIScale]: number } = {}
+local closing: { [UIScale]: boolean } = {}
+
+function UiDeco.popIn(scale: UIScale, target: number)
+	popSeq[scale] = (popSeq[scale] or 0) + 1
+	closing[scale] = nil
+	scale.Scale = target * 0.7
+	TweenService:Create(scale, TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = target }):Play()
+end
+
+function UiDeco.popOut(scale: UIScale, done: () -> ())
+	if closing[scale] then
+		return
+	end
+	local seq = (popSeq[scale] or 0) + 1
+	popSeq[scale] = seq
+	closing[scale] = true
+	local target = scale.Scale
+	local tween = TweenService:Create(scale, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.In), { Scale = target * 0.6 })
+	tween.Completed:Once(function()
+		if popSeq[scale] == seq then
+			closing[scale] = nil
+			done()
+			scale.Scale = target -- 다음에 열 때를 위해 되돌린다(이미 숨겨져서 안 보인다)
+		end
+	end)
+	tween:Play()
+end
+
+-- 닫히는 중인지(그 사이 다시 보여야 하면 popIn을 부른다)
+function UiDeco.isClosing(scale: UIScale): boolean
+	return closing[scale] == true
 end
 
 return UiDeco

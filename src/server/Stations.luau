@@ -8,6 +8,7 @@
 -- 아이스크림 기계(뒷줄 양쪽에 하나씩)는 한 대에 한 명만 쓴다: 창(IceCream.client)에서 고른 그릇·맛·토핑을 서버가 검사해 손에 쥐여 준다.
 -- 프롬프트를 켜고 끄는 것은 클라이언트(Prompts)가 한다: 서버는 쓸 수 있는지(속성 On)와 기본 길게 누르는 시간(속성 Hold)만 알려 주고,
 -- 클라이언트가 캐릭터가 바라보는 쪽의 가장 가까운 기구 하나만 켠다. 판정은 그대로 서버가 한다.
+local CollectionService = game:GetService("CollectionService")
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -474,9 +475,26 @@ local function now(): number
 	return workspace:GetServerTimeNow()
 end
 
+-- 화면 움직임(Animals·Kitchen 클라이언트)에 알리는 신호. 판정에는 쓰지 않는다.
+--   기구 모델 속성 Cook: "" · "cooking"(익는 중) · "done"(다 익음) · "danger"(곧 탐) · "burnt"
+--   기구 모델 속성 DoneAt: 조합·토핑·설거지가 끝난 서버 시각(반짝 효과)
+--   플레이어 속성 Working: F 길게 누르는 중이거나 아이스크림 기계를 쓰는 중이면 기구 종류(요리 중 몸 흔들기)
+local function setCook(station: Station, value: string)
+	if station.model:GetAttribute("Cook") ~= value then
+		station.model:SetAttribute("Cook", value)
+	end
+end
+
+local function sparkle(station: Station)
+	station.model:SetAttribute("DoneAt", workspace:GetServerTimeNow())
+end
+
 local function releaseMachine(station: Station, closeWindow: boolean)
 	local user = station.user
 	station.user = nil
+	if user and user:GetAttribute("Working") == "icemachine" then
+		user:SetAttribute("Working", nil)
+	end
 	if closeWindow and user and user.Parent then
 		Remotes.IceOpen:FireClient(user, false)
 	end
@@ -505,6 +523,7 @@ local function useMachine(player: Player, station: Station)
 	end
 	station.user = player
 	station.userSince = now()
+	player:SetAttribute("Working", "icemachine")
 	refreshPrompts(station)
 	Remotes.IceOpen:FireClient(player, true)
 end
@@ -585,6 +604,7 @@ local function prep(player: Player, station: Station)
 	table.insert(items, result)
 	Items.putAt(result, station.slots[1])
 	changed(station)
+	sparkle(station)
 	Remotes.sfx(player, "prep")
 end
 
@@ -593,6 +613,7 @@ local function sauce(player: Player, station: Station)
 	if item and Items.isDish(item) and item.state == "cooked" and Config.Dishes[item.kind].sauce then
 		Items.setState(item, "sauced")
 		refreshPrompts(station)
+		sparkle(station)
 		Remotes.sfx(player, "prep")
 	end
 end
@@ -606,6 +627,7 @@ local function wash(player: Player, station: Station)
 	Items.destroy(item)
 	changed(station)
 	toast(player, "뽀득뽀득! 설거지 끝")
+	sparkle(station)
 	Stations.onStat(player, "cleaned", 1)
 	Stations.onSpend("wash", 1)
 	Remotes.sfx(player, "clean")
@@ -700,6 +722,7 @@ local function tickCookers(dt: number)
 		local item = cookingItem(station)
 		local steam = station.steam
 		if not item or station.onFire then
+			setCook(station, "")
 			barGui.Enabled = false
 			if steam then
 				steam.Enabled = false
@@ -721,6 +744,7 @@ local function tickCookers(dt: number)
 		end
 
 		local fraction, color = progressOf(station, item)
+		setCook(station, if item.state == "prepped" then "cooking" elseif item.state == "burnt" then "burnt" elseif fraction < 0.35 then "danger" else "done")
 		bar.Size = UDim2.fromScale(fraction, 1)
 		bar.BackgroundColor3 = color
 		barGui.Enabled = not station.onFire
@@ -895,11 +919,20 @@ function Stations.init(layout: Store.Layout)
 			station.bar, station.barGui = makeBar(base)
 		end
 
+		CollectionService:AddTag(built.model, "Station")
 		station.prompt.Triggered:Connect(function(player: Player)
 			use(player, station)
 		end)
 		local holdPrompt = station.holdPrompt
 		if holdPrompt then
+			holdPrompt.PromptButtonHoldBegan:Connect(function(player: Player)
+				player:SetAttribute("Working", spec.kind)
+			end)
+			holdPrompt.PromptButtonHoldEnded:Connect(function(player: Player)
+				if player:GetAttribute("Working") == spec.kind then
+					player:SetAttribute("Working", nil)
+				end
+			end)
 			holdPrompt.Triggered:Connect(function(player: Player)
 				if station.locked then
 					return

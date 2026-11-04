@@ -5,6 +5,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TextService = game:GetService("TextService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -26,6 +27,13 @@ local PINK = Color3.fromRGB(250, 196, 212)
 local CORAL = Color3.fromRGB(236, 132, 100)
 local WHITE = Color3.new(1, 1, 1)
 
+-- 카드 크기는 직접 계산한다. AutomaticSize는 UIScale과 같이 쓰면 줄바꿈된 글의 높이를 한 줄로 잡아서 글이 잘렸다.
+local CARD_W = 290
+local PAD_X, PAD_Y, GAP = 16, 12, 8
+local HEAD_H, SKIP_H = 24, 30
+local TEXT_SIZE = 16
+local LINE = 1.15
+
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local stationsFolder = workspace:WaitForChild("Store"):WaitForChild("Stations")
@@ -42,8 +50,7 @@ gui.Parent = playerGui
 local card = Instance.new("Frame")
 card.AnchorPoint = Vector2.new(0, 0.5)
 card.Position = UDim2.new(0, 14, 0.42, 0)
-card.Size = UDim2.fromOffset(290, 0)
-card.AutomaticSize = Enum.AutomaticSize.Y
+card.Size = UDim2.fromOffset(CARD_W, 120)
 card.BackgroundColor3 = PAPER
 card.BorderSizePixel = 0
 card.Parent = gui
@@ -55,13 +62,13 @@ border.Color = PINK
 border.Thickness = 3
 border.Parent = card
 local padding = Instance.new("UIPadding")
-padding.PaddingLeft = UDim.new(0, 16)
-padding.PaddingRight = UDim.new(0, 16)
-padding.PaddingTop = UDim.new(0, 12)
-padding.PaddingBottom = UDim.new(0, 12)
+padding.PaddingLeft = UDim.new(0, PAD_X)
+padding.PaddingRight = UDim.new(0, PAD_X)
+padding.PaddingTop = UDim.new(0, PAD_Y)
+padding.PaddingBottom = UDim.new(0, PAD_Y)
 padding.Parent = card
 local list = Instance.new("UIListLayout")
-list.Padding = UDim.new(0, 8)
+list.Padding = UDim.new(0, GAP)
 list.SortOrder = Enum.SortOrder.LayoutOrder
 list.Parent = card
 local scale = Instance.new("UIScale")
@@ -69,7 +76,7 @@ scale.Parent = card
 
 local heading = Instance.new("TextLabel")
 heading.BackgroundTransparency = 1
-heading.Size = UDim2.new(1, 0, 0, 24)
+heading.Size = UDim2.new(1, 0, 0, HEAD_H)
 heading.Font = ROUND
 heading.TextSize = 20
 heading.TextColor3 = CORAL
@@ -79,19 +86,19 @@ heading.Parent = card
 
 local body = Instance.new("TextLabel")
 body.BackgroundTransparency = 1
-body.Size = UDim2.new(1, 0, 0, 0)
-body.AutomaticSize = Enum.AutomaticSize.Y
+body.Size = UDim2.new(1, 0, 0, TEXT_SIZE)
 body.Font = BODY
-body.TextSize = 16
+body.TextSize = TEXT_SIZE
 body.TextColor3 = INK
 body.TextWrapped = true
 body.TextXAlignment = Enum.TextXAlignment.Left
-body.LineHeight = 1.15
+body.TextYAlignment = Enum.TextYAlignment.Top
+body.LineHeight = LINE
 body.LayoutOrder = 2
 body.Parent = card
 
 local skip = Instance.new("TextButton")
-skip.Size = UDim2.fromOffset(96, 30)
+skip.Size = UDim2.fromOffset(96, SKIP_H)
 skip.BackgroundColor3 = WHITE
 skip.BorderSizePixel = 0
 skip.Font = BODY
@@ -108,6 +115,18 @@ skipBorder.Color = PINK
 skipBorder.Thickness = 2
 skipBorder.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 skipBorder.Parent = skip
+
+-- 글 길이에 맞춰 본문과 카드 높이를 다시 잡는다(글을 바꿀 때마다 부른다)
+local function fitCard()
+	local bounds = TextService:GetTextSize(body.Text, TEXT_SIZE, BODY, Vector2.new(CARD_W - PAD_X * 2, 10000))
+	local bodyH = math.ceil(math.max(bounds.Y, TEXT_SIZE) * LINE) + 4
+	body.Size = UDim2.new(1, 0, 0, bodyH)
+	local height = PAD_Y * 2 + HEAD_H + GAP + bodyH
+	if skip.Visible then
+		height += GAP + SKIP_H
+	end
+	card.Size = UDim2.fromOffset(CARD_W, height)
+end
 local skipped = false
 skip.Activated:Connect(function()
 	skipped = true
@@ -297,6 +316,7 @@ local function enter(index: number)
 		heading.Text = "튜토리얼 끝!"
 		body.Text = "잘했어요! 이제 준비 화면에서 영업을 시작해 봐요."
 		skip.Visible = false
+		fitCard()
 		clearArrows()
 		return
 	end
@@ -307,6 +327,7 @@ local function enter(index: number)
 	heading.Text = `튜토리얼 {index}/{#steps}`
 	body.Text = step.text
 	skip.Visible = true
+	fitCard()
 	pointAt(step.targets())
 end
 

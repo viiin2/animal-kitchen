@@ -37,7 +37,7 @@ local combo = 0
 -- 손님 자리에 디저트를 내면: 손님이 주문한 디저트인지 보고, 맞으면 그날 매출(코인)에 더한다
 Stations.onServe = function(player: Player, seat: number, dish): (boolean, string)
 	local tipBonus = AnimalLooks.perksFor(player:GetAttribute("AnimalIndex")).tip
-	local ok, message, price, tip = Customers.serveAt(seat, { kind = dish.kind, state = dish.state, melt = dish.melt, spec = dish.spec }, tipBonus)
+	local ok, message, price, tip, groupDone = Customers.serveAt(seat, { kind = dish.kind, state = dish.state, melt = dish.melt, spec = dish.spec }, tipBonus)
 	if ok then
 		local t = os.clock()
 		if t - lastServeAt > Config.Combo.seconds then
@@ -50,13 +50,14 @@ Stations.onServe = function(player: Player, seat: number, dish): (boolean, strin
 		if bonus > 0 then
 			message = `{message} · 팀 콤보 x{combo + 1} +{bonus}`
 		end
+		-- 코인 효과(날아가는 코인·폴짝·색종이)를 먼저 보내고 금고를 바꾼다: 코인이 지갑에 닿을 때 숫자가 오르게
+		local stand = layout.seats[seat]
+		if stand and price > 0 then
+			Remotes.Earned:FireAllClients(stand.stand.Position + Vector3.new(0, 7.5, 0), price + tip + bonus, combo, player.UserId, combo > 0 or groupDone)
+		end
 		Days.earn(price, tip + bonus)
 		Days.stat(player, "served", 1)
 		Days.stat(player, "coins", price + tip + bonus)
-		local stand = layout.seats[seat]
-		if stand and price > 0 then
-			Remotes.Earned:FireAllClients(stand.stand.Position + Vector3.new(0, 7.5, 0), price + tip + bonus, combo)
-		end
 		-- 튜토리얼이 "손님에게 냈다"를 이 숫자로 안다
 		local served = player:GetAttribute("Served")
 		player:SetAttribute("Served", (if typeof(served) == "number" then served else 0) + 1)
@@ -95,7 +96,7 @@ for _, player in Players:GetPlayers() do
 	task.spawn(joined, player)
 end
 
-Remotes.Admin.OnServerEvent:Connect(function(player: Player, action: unknown)
+Remotes.Admin.OnServerEvent:Connect(function(player: Player, action: unknown, value: unknown)
 	if not isAdmin(player) then
 		return
 	end
@@ -103,6 +104,8 @@ Remotes.Admin.OnServerEvent:Connect(function(player: Player, action: unknown)
 		Days.adminPass()
 	elseif action == "stop" then
 		Days.adminStop()
+	elseif action == "coins" and typeof(value) == "number" and value == value and math.abs(value) <= 1e9 then
+		Days.adminCoins(player, math.floor(value))
 	end
 end)
 Players.PlayerRemoving:Connect(Stations.drop)

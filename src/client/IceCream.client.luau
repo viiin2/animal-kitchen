@@ -9,6 +9,7 @@ local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local FoodModels = require(ReplicatedStorage.Shared.FoodModels)
+local UiDeco = require(ReplicatedStorage.Shared.UiDeco)
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local openEvent = remotes:WaitForChild(Config.Remotes.IceOpen) :: RemoteEvent
 local makeEvent = remotes:WaitForChild(Config.Remotes.IceMake) :: RemoteEvent
@@ -285,11 +286,17 @@ end
 
 -- ── 열고 닫기 ──
 
+local function hide()
+	UiDeco.popOut(scale, function()
+		gui.Enabled = false
+	end)
+end
+
 local function close(send: boolean, value: Config.IceSpec?)
-	if not gui.Enabled then
+	if not gui.Enabled or UiDeco.isClosing(scale) then
 		return
 	end
-	gui.Enabled = false
+	hide()
 	player:SetAttribute("IceWindowOpen", false)
 	if send then
 		makeEvent:FireServer(value)
@@ -317,7 +324,9 @@ end
 
 openEvent.OnClientEvent:Connect(function(open: boolean)
 	if not open then
-		gui.Enabled = false
+		if gui.Enabled then
+			hide()
+		end
 		player:SetAttribute("IceWindowOpen", false)
 		return
 	end
@@ -328,6 +337,7 @@ openEvent.OnClientEvent:Connect(function(open: boolean)
 	applyScale()
 	spinStart = os.clock()
 	gui.Enabled = true
+	UiDeco.popIn(scale, scale.Scale)
 	player:SetAttribute("IceWindowOpen", true) -- 튜토리얼이 본다
 end)
 

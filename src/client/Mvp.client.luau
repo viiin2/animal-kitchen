@@ -1,5 +1,5 @@
 --!strict
--- 오늘의 MVP: 영업이 끝나 밤 정산으로 넘어갈 때 정산 창 위에 잠깐 띄운다.
+-- 오늘의 MVP: 영업이 끝나 밤 정산으로 넘어갈 때("오늘 번 돈" 다음) 정산 창 위에 잠깐 띄운다.
 -- 서버(Days)가 부문마다 가장 잘한 사람을 골라 상태(mvp)로 보내 준다: 서빙왕·코인왕·아이스크림 장인·청소왕·불 끈 영웅.
 -- 카드마다 그 친구의 동물 인형(요리사 차림)이 빙글빙글 돈다. "좋아요!"를 누르거나 10초가 지나면 닫힌다.
 local Players = game:GetService("Players")
@@ -110,8 +110,13 @@ corner(ok, 14)
 ok.Parent = window
 
 local function close()
-	gui.Enabled = false
-	table.clear(models)
+	if not gui.Enabled then
+		return
+	end
+	UiDeco.popOut(scale, function()
+		gui.Enabled = false
+		table.clear(models)
+	end)
 end
 ok.Activated:Connect(close)
 
@@ -177,12 +182,18 @@ local function open(cards: { Card })
 	end
 	openedAt = os.clock()
 	gui.Enabled = true
+	UiDeco.popIn(scale, scale.Scale)
 end
 
 stateEvent.OnClientEvent:Connect(function(state: { phase: string, mvp: { Card }? })
 	local cards = state.mvp
 	if state.phase == "night" and lastPhase == "open" and cards and #cards > 0 then
-		open(cards)
+		-- 가운데서 "오늘 번 돈"이 올라간 뒤 정산 창과 함께 뜬다(Hud)
+		task.delay(Config.NightIntroSeconds, function()
+			if (lastPhase :: string) == "night" then -- 그 사이 다음 날로 넘어갔으면 띄우지 않는다
+				open(cards)
+			end
+		end)
 	elseif state.phase ~= "night" and gui.Enabled then
 		close()
 	end

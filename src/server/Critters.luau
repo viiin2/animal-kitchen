@@ -1,6 +1,7 @@
 --!strict
 -- 동물 모델 만들기. 생김새는 AnimalLooks(공용)에 있다.
--- customer(): 손님. Root(발밑 가운데)에 용접해서 PivotTo로 옮긴다. 앞은 -Z(LookVector).
+-- customer(): 손님. Root(발밑 가운데)를 PivotTo로 옮긴다. 앞은 -Z(LookVector).
+--   몸은 Root에 Motor6D("Bob")로 매달아 클라이언트(Animals)가 통통·폴짝·부들부들 움직인다.
 -- character(i): 플레이어 캐릭터. 요리사 모자와 앞치마를 두르고, Humanoid로 걷는다.
 --   몸은 HumanoidRootPart에 Motor6D("Bob")로 매달아 클라이언트(Animals)가 걸을 때 통통 튀게 한다.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -32,7 +33,33 @@ function Critters.customer(): Model
 	local model = Build.model("Customer", Vector3.new(2.4, 0.2, 2.4))
 	local look = AnimalLooks.list[rng:NextInteger(1, #AnimalLooks.list)]
 	AnimalLooks.paint(model, look, { chef = false, shirt = SHIRTS[rng:NextInteger(1, #SHIRTS)] })
-	Build.rig(model)
+	local root = model.PrimaryPart :: BasePart
+	local body = Instance.new("Part")
+	body.Name = "Body"
+	body.Size = Vector3.new(1, 1, 1)
+	body.CFrame = root.CFrame
+	body.Transparency = 1
+	body.CanCollide = false
+	body.CanQuery = false
+	body.CanTouch = false
+	body.Massless = true
+	body.Parent = model
+	local bob = Instance.new("Motor6D")
+	bob.Name = "Bob"
+	bob.Part0 = root
+	bob.Part1 = body
+	bob.Parent = root
+	for _, part in model:GetDescendants() do
+		if part:IsA("BasePart") and part ~= root and part ~= body then
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = body
+			weld.Part1 = part
+			weld.Parent = part
+			part.Anchored = false
+			part.Massless = true
+		end
+	end
+	root.Anchored = true
 	return model
 end
 

@@ -222,12 +222,23 @@ local function applyScale()
 end
 
 local function setOpen(open: boolean)
-	gui.Enabled = open
 	if open then
+		local wasOpen = gui.Enabled and not UiDeco.isClosing(scale)
+		gui.Enabled = true
 		applyScale()
 		render()
-	elseif player:GetAttribute("AnimalPicker") == true then
-		player:SetAttribute("AnimalPicker", false)
+		if not wasOpen then
+			UiDeco.popIn(scale, scale.Scale)
+		end
+	else
+		if gui.Enabled then
+			UiDeco.popOut(scale, function()
+				gui.Enabled = false
+			end)
+		end
+		if player:GetAttribute("AnimalPicker") == true then
+			player:SetAttribute("AnimalPicker", false)
+		end
 	end
 end
 
